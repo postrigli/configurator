@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { AppState, CartItem } from './types';
 import { calculateCart } from './logic';
 import { BoilerSection } from './components/BoilerSection';
@@ -50,11 +50,36 @@ const getInitialState = (): AppState => ({
   customOrderNumber: ''
 });
 
+// Пункты, которые ectoControl Start не поддерживает: при переходе на Start
+// они обнуляются, а прежние значения сохраняются в буфер до возврата на v4.0.
+const START_UNSUPPORTED_DEFAULTS: Partial<AppState> = {
+  wirelessRadioSensors: 0,
+  coSensors: 0,
+  wirelessSmokeSensors: 0,
+  wirelessLeakSensors: 0,
+  wirelessMotionSensors: 0,
+  wirelessKeyfobs: 0,
+  wirelessLeakSensorsLora: 0,
+  wirelessThermostats: 0,
+  wiredThermostats: 0,
+  mixingValves: 0,
+  heatingPumps: 0,
+  recirculationPump: false,
+  zones: 0,
+  zonesWithTwoSources: 0,
+  manifoldServos: 0,
+  ntcFloorSensors: 0,
+  gasSensors: 0
+};
+
+type V40Buffer = { saved: Partial<AppState>; boilers: AppState['boilers'] };
+
 const App: React.FC = () => {
   const [state, setState] = useState<AppState>(getInitialState());
   const [cartItems, setCartItems] = useState<CartItem[]>([]);
   const [showResetModal, setShowResetModal] = useState(false);
   const [showWarningModal, setShowWarningModal] = useState(false);
+  const v40BufferRef = useRef<V40Buffer | null>(null);
 
   // Recalculate logic whenever state changes
   useEffect(() => {
@@ -132,35 +157,40 @@ const App: React.FC = () => {
   };
 
   const handleBaseUnitChange = (unitId: 'ec01v40' | 'ec01105') => {
+    if (unitId === state.baseUnitId) return;
+
     if (unitId === 'ec01105') {
-      setState(prev => ({
-        ...prev,
+      const keys = Object.keys(START_UNSUPPORTED_DEFAULTS) as (keyof AppState)[];
+      v40BufferRef.current = {
+        saved: Object.fromEntries(keys.map(k => [k, state[k]])) as Partial<AppState>,
+        boilers: state.boilers
+      };
+      setState({
+        ...state,
+        ...START_UNSUPPORTED_DEFAULTS,
         baseUnitId: 'ec01105',
-        boilers: prev.boilers.slice(0, 1),
-        wirelessRadioSensors: 0,
-        coSensors: 0,
-        wirelessSmokeSensors: 0,
-        wirelessLeakSensors: 0,
-        wirelessMotionSensors: 0,
-        wirelessKeyfobs: 0,
-        wirelessLeakSensorsLora: 0,
-        wirelessThermostats: 0,
-        wiredThermostats: 0,
-        mixingValves: 0,
-        heatingPumps: 0,
-        recirculationPump: false,
-        zones: 0,
-        zonesWithTwoSources: 0,
-        manifoldServos: 0,
-        ntcFloorSensors: 0,
-        gasSensors: 0
-      }));
+        boilers: state.boilers.slice(0, 1)
+      });
     } else {
-      setState(prev => ({
-        ...prev,
+      const buffer = v40BufferRef.current;
+      v40BufferRef.current = null;
+      const restored: Partial<AppState> = {};
+      if (buffer) {
+        // Значение из буфера возвращается, только если на Start пункт не меняли
+        for (const [key, value] of Object.entries(buffer.saved) as [keyof AppState, unknown][]) {
+          if (state[key] === START_UNSUPPORTED_DEFAULTS[key]) {
+            (restored as Record<string, unknown>)[key] = value;
+          }
+        }
+        // Котлы, изменённые на Start, остаются; лишние котлы v4.0 возвращаются
+        restored.boilers = [...state.boilers, ...buffer.boilers.slice(state.boilers.length)];
+      }
+      setState({
+        ...state,
+        ...restored,
         baseUnitId: 'ec01v40',
         backupBoiler: false
-      }));
+      });
     }
   };
 
@@ -187,6 +217,7 @@ const App: React.FC = () => {
   };
 
   const confirmReset = () => {
+    v40BufferRef.current = null;
     setState(getInitialState());
     setShowResetModal(false);
   };
