@@ -1,0 +1,31 @@
+/*
+  Защита виджета от стилей темы сайта (OpenCart, тема ectostroy).
+  Тема задаёт глобальные правила для h1–h6, p, a, span и класса .flex,
+  а утилиты Tailwind подключены без CSS-слоя, чтобы тема их не перебивала.
+  Селекторы через :where() оставляют здесь низкую специфичность,
+  поэтому классы Tailwind, подключённые ниже, по-прежнему важнее.
+*/
+:where(h1, h2, h3, h4, h5, h6, p) {
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  line-height: inherit;
+  letter-spacing: inherit;
+  margin: 0;
+  padding: 0;
+}
+
+:where(a) {
+  display: inline;
+  color: inherit;
+  text-decoration: inherit;
+}
+
+:where(span) {
+  display: inline;
+}
+
+/* Тема: .flex { flex-wrap: wrap } — из-за этого корзина уезжала вниз */
+:where(.flex) {
+  flex-wrap: nowrap;
+}
