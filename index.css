@@ -69,7 +69,8 @@
 }
 
 #ectocontrol-configurator-root {
-  @import "tailwindcss";
+  @import "tailwindcss" important;
+  @import "./widget-reset.css";
 
   font-family: 'Inter', sans-serif;
   -webkit-font-smoothing: antialiased;
