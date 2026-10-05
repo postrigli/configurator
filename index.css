@@ -1,0 +1,113 @@
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 300;
+  font-display: swap;
+  src: url('/download/images_resized/fonts/Inter_18pt-Light.ttf') format('truetype');
+}
+
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/download/images_resized/fonts/Inter_18pt-Regular.ttf') format('truetype');
+}
+
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('/download/images_resized/fonts/Inter_18pt-Medium.ttf') format('truetype');
+}
+
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('/download/images_resized/fonts/Inter_18pt-SemiBold.ttf') format('truetype');
+}
+
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('/download/images_resized/fonts/Inter_24pt-Bold.ttf') format('truetype');
+}
+
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+  src: url('/download/images_resized/fonts/Inter_24pt-ExtraBold.ttf') format('truetype');
+}
+
+@theme {
+  --color-ecto-sand: #ffd269;
+  --color-ecto-lightgray: #91949e;
+  --color-ecto-dark: #51555c;
+  --color-ecto-gold: #fbba00;
+  --color-ecto-blue: #518cc7;
+  
+  /* Override default oklch grays with safe hex colors for html2canvas */
+  --color-gray-50: #f9fafb;
+  --color-gray-100: #f3f4f6;
+  --color-gray-200: #e5e7eb;
+  --color-gray-300: #d1d5db;
+  --color-gray-400: #9ca3af;
+  --color-gray-500: #6b7280;
+  --color-gray-600: #4b5563;
+  --color-gray-700: #374151;
+  --color-gray-800: #1f2937;
+  --color-gray-900: #111827;
+
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+}
+
+#ectocontrol-configurator-root {
+  @import "tailwindcss";
+
+  font-family: 'Inter', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Print Styles */
+@media print {
+  #ectocontrol-configurator-root { -webkit-print-color-adjust: exact; }
+  .no-print { display: none !important; }
+  .print-only { display: block !important; }
+  .page-break { page-break-before: always; }
+  
+  /* Hide scrollbars in print */
+  ::-webkit-scrollbar { display: none; }
+}
+.print-only { display: none; }
+
+/* Hide number input arrows */
+#ectocontrol-configurator-root input::-webkit-outer-spin-button,
+#ectocontrol-configurator-root input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+#ectocontrol-configurator-root input[type=number] {
+  -moz-appearance: textfield;
+}
+
+#ectocontrol-configurator-root .custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+#ectocontrol-configurator-root .custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+#ectocontrol-configurator-root .custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #e5e7eb;
+  border-radius: 10px;
+}
+#ectocontrol-configurator-root .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #d1d5db;
+}

@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Конфигуратор ectoControl</title>
+  
+  <!-- PWA Meta Tags -->
+  <meta name="theme-color" content="#fbba00">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="ectoControl">
+  <link rel="apple-touch-icon" href="https://ectocontrol.ru/catalog/view/theme/ectostroy/image/logo.svg">
+  
+  <script>
+    // Динамическое создание manifest.json для PWA
+    const manifest = {
+      name: "Конфигуратор ectoControl",
+      short_name: "ectoControl",
+      start_url: window.location.pathname,
+      display: "standalone",
+      background_color: "#F9FAFB",
+      theme_color: "#fbba00",
+      icons: [
+        {
+          src: "https://ectocontrol.ru/catalog/view/theme/ectostroy/image/logo.svg",
+          sizes: "any",
+          type: "image/svg+xml",
+          purpose: "any maskable"
+        }
+      ]
+    };
+    const blob = new Blob([JSON.stringify(manifest)], { type: 'application/manifest+json' });
+    const manifestLink = document.createElement('link');
+    manifestLink.rel = 'manifest';
+    manifestLink.href = URL.createObjectURL(blob);
+    document.head.appendChild(manifestLink);
+  </script>
+
+
+</head>
+<body class="bg-[#F9FAFB] text-ecto-dark">
+  <div id="ectocontrol-configurator-root"></div>
+  <script type="module" src="/index.tsx"></script>
+</body>
+</html>

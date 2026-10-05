@@ -1,0 +1,28 @@
+{# 
+  Инструкция по интеграции конфигуратора ectoControl в CMS OpenCart (TWIG шаблон)
+  Разместите этот код в нужном twig-шаблоне (например, catalog/view/theme/default/template/information/information.twig)
+#}
+
+<!-- 1. HTML-контейнер для монтирования виджета React -->
+<!-- Примечание: Убедитесь, что ID контейнера совпадает с указанным в index.tsx -->
+<div id="ectocontrol-configurator-root"></div>
+
+<!-- 2. Подключение стилей виджета -->
+<!-- Стили полностью изолированы внутри контейнера #ectocontrol-configurator-root и не нарушат стили Bootstrap или темы сайта -->
+<link rel="stylesheet" href="/configurator/configurator.css">
+
+<!-- 3. Подключение JS-скрипта (модуль) -->
+<!-- Скрипт инициализирует и монтирует React-приложение в контейнер при его обнаружении на странице -->
+<script type="module" src="/configurator/configurator.js"></script>
+
+{# 
+  КРАТКАЯ ИНСТРУКЦИЯ ПО УСТАНОВКЕ ДЛЯ АДМИНИСТРАТОРА:
+  
+  1. Соберите проект с помощью команды: npm run build
+  2. Загрузите файлы из папки dist/ на сервер в папку /configurator/ так, чтобы пути выглядели следующим образом:
+     - /configurator/configurator.js
+     - /configurator/configurator.css
+     - /configurator/chunks/... (при наличии чанков)
+  3. Вставьте данный HTML-код в TWIG-шаблон нужной информационной страницы вашей CMS OpenCart.
+  4. Сбросьте кэш модификаторов OpenCart и кэш системных шаблонов в панели администратора.
+#}
