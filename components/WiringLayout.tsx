@@ -81,14 +81,34 @@ const boxColors = (b: LBox) => {
   return { backgroundColor: '#F7F8FA', borderColor: '#B9C0C8' };
 };
 
-const BoxView: React.FC<{ b: LBox }> = ({ b }) => (
+const offTitle = (b: LBox) => [b.node.productId, b.node.title, b.node.subtitle].filter(Boolean).join(' ');
+
+// Группа на другом листе: вместо коробки — подпись у стрелки.
+const OffPageLabel: React.FC<{ b: LBox }> = ({ b }) => {
+  const o = b.offPage!;
+  const color = LINE_STYLE[o.kind].color;
+  if (o.edgeY !== undefined) {
+    const len = 120; const cy = (o.startY + 10 + o.edgeY) / 2; const x = b.x + b.w / 2;
+    const mk = (text: string, dx: number, bold = false) => (
+      <Text style={[s.lbl, { color: bold ? '#C77F00' : color, fontWeight: bold ? 'bold' : 'normal', fontSize: bold ? 5.6 : 5, left: x + dx - len / 2, top: cy - 3, width: len, transform: 'rotate(-90deg)' }]}>{text}</Text>
+    );
+    return <>{mk(`→ лист ${b.refSheet ?? '?'}`, -4.4, true)}{mk(offTitle(b), 4.4)}</>;
+  }
+  return (
+    <View style={{ position: 'absolute', left: b.x - 4, top: o.startY + 12, width: b.w + 8, alignItems: 'center' }}>
+      <Text style={s.ref}>→ лист {b.refSheet ?? '?'}</Text>
+      <Text style={[s.sub, { color: DARK }]}>{offTitle(b)}</Text>
+    </View>
+  );
+};
+
+const BoxView: React.FC<{ b: LBox }> = ({ b }) => b.offPage ? <OffPageLabel b={b} /> : (
   <>
     <View style={[s.box, boxColors(b), { left: b.x, top: b.y, width: b.w, height: b.h }]}>
       {b.node.productId && b.node.kind !== 'load' ? <Text style={s.art}>{b.node.productId}</Text> : null}
       <Text style={s.name}>{b.node.title}</Text>
       {b.node.subtitle ? <Text style={s.sub}>{b.node.subtitle}</Text> : null}
       {b.node.reserve ? <Text style={s.sub}>резерв</Text> : null}
-      {b.fromNote ? <Text style={s.sub}>{b.fromNote}</Text> : null}
       {b.refSheet ? <Text style={s.ref}>→ лист {b.refSheet}</Text> : null}
     </View>
     {b.inTab ? (
@@ -136,6 +156,19 @@ const SheetPage: React.FC<{ sh: LSheet; order: string; total: number }> = ({ sh,
           return <Waves key={`ws${i}`} x={+x} y={+y + 4} color={LINE_STYLE[kind as LineKind].color} dir={-1} />;
         })}</G>
       ) : null}
+      {sh.boxes.filter(b => b.offPage).map((b, i) => {
+        const o = b.offPage!; const st = LINE_STYLE[o.kind]; const x = b.x + b.w / 2;
+        const end = o.edgeY ?? o.startY + 10;
+        return (
+          <G key={`o${i}`}>
+            <Path d={`M ${x} ${o.startY} L ${x} ${end - 4}`} stroke={st.color} strokeWidth={st.width} strokeDasharray={st.dash} fill="none" />
+            <Path d={`M ${x - 3} ${end - 5} L ${x + 3} ${end - 5} L ${x} ${end} Z`} fill={st.color} />
+          </G>
+        );
+      })}
+      {sh.lines.filter(l => l.incoming).map((l, i) => (
+        <Path key={`in${i}`} d={`M ${l.start[0] - 3} ${l.start[1]} L ${l.start[0] + 3} ${l.start[1]} L ${l.start[0]} ${l.start[1] + 5} Z`} fill={LINE_STYLE[l.kind].color} />
+      ))}
       <Rect x={0} y={0} width={0.1} height={0.1} fill="#fff" />
     </Svg>
 

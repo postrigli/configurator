@@ -17,7 +17,10 @@ const BOX_W = 72;       // ширина коробки устройства
 const GAP_X = 7;        // минимальный зазор между коробками
 const ROW_CAP = Math.floor((CONTENT_W + GAP_X) / (BOX_W + GAP_X)); // коробок в этаже
 const BOX_H = 38;
-const MAX_ROWS = 3;      // рядов в одном этаже (конечные устройства)
+const MAX_ROWS = 3;
+const CONT_ROOT_Y = 140;  // корни листа-продолжения: линия входит сверху, от линии шапки
+const EDGE_TOP = 62;
+const EDGE_BOTTOM = 546;      // рядов в одном этаже (конечные устройства)
 const BYPASS_PAD = 10;  // отступ вертикалей обхода от коробок
 const TAB_H = 7;
 const LEVEL_STEP = 5;   // шаг между полками, пт
@@ -52,6 +55,8 @@ export interface LBox {
   refSheet?: number;      // группа продолжается на листе N
   isSheetRoot?: boolean;
   fromNote?: string;      // «от листа 1, ДОП»
+  /** Группа на другом листе: коробки нет, линия кончается стрелкой (у края листа, если путь вниз свободен). */
+  offPage?: { kind: LineKind; startY: number; edgeY?: number };
 }
 
 export interface LLine {
@@ -64,6 +69,8 @@ export interface LLine {
   labelX: number; labelY: number; // центр последнего вертикального отрезка
   labelLen: number;
   wavesStart: boolean;
+  /** Линия входит с края листа-продолжения; подпись «от листа N» заполняется в конце. */
+  incoming?: WNode;
 }
 
 export interface LSheet {
@@ -95,6 +102,9 @@ export const layoutWiring = (model: WiringModel): LayoutResult => {
   const rows: TableRow[] = [];
   const queue: Pending[] = model.units.map(u => ({ unit: u }));
   const sheetOf = new Map<WNode, number>(); // для перекрёстных ссылок
+  const linkTo = new Map<WNode, WLink>();     // входящая линия каждого узла
+  const indexLinks = (n: WNode) => n.children.forEach(l => { linkTo.set(l.to, l); indexLinks(l.to); });
+  model.units.forEach(u => indexLinks(u.root));
 
   while (queue.length) {
     const pend = queue.shift()!;
@@ -241,7 +251,7 @@ export const layoutWiring = (model: WiringModel): LayoutResult => {
         const lvG = assignLevels(proxG);
         proxG.forEach((p, i) => { segs[i].level = p.level; });
         const rowY: number[] = [];
-        rowY[0] = (!job.unit && fi === 0) ? 80 : prevBottom + FIRST_GAP + LEVEL_STEP * (lvG - 1) + DROP + TAB_H;
+        rowY[0] = (!job.unit && fi === 0) ? CONT_ROOT_Y : prevBottom + FIRST_GAP + LEVEL_STEP * (lvG - 1) + DROP + TAB_H;
         for (let r = 1; r < rowsOf.length; r++) {
           const sub = segs.filter(g => g.row === r);
           const base = rowY[r - 1] + BOX_H;
@@ -285,6 +295,7 @@ export const layoutWiring = (model: WiringModel): LayoutResult => {
 
     // ---- линии
     const parentName = job.unit ? `${job.unit.root.title}${model.units.length > 1 ? ` (блок ${job.unit.index})` : ''}` : '';
+    const polys: [number, number][][] = [];
     segsAll.forEach(g => {
       const [sx, sy] = g.s; const [tx, ty] = g.t;
       const py = Math.max(sy, g.gBase) + FIRST_GAP + LEVEL_STEP * g.level;
@@ -298,11 +309,43 @@ export const layoutWiring = (model: WiringModel): LayoutResult => {
       } else {
         pts = [[sx, sy], [sx, py], [tx, py], [tx, ty]]; labelTop = py;
       }
+      polys.push(pts);
       sheet.lines.push({
         kind: g.l.kind, d: roundedPath(pts), start: [sx, sy], end: [tx, ty], portName: g.l.portName, cable: g.l.cable,
         labelX: tx, labelY: (labelTop + ty) / 2, labelLen: ty - labelTop, wavesStart: isWireless(g.l.kind),
       });
       sheet.kinds.add(g.l.kind);
+    });
+
+    // ---- уход на другой лист: если ниже по вертикали свободно — линия идёт до нижнего края листа
+    collapsedHere.forEach(n => {
+      const b = boxes.get(n)!;
+      const g = segsAll.find(x => x.l.to === n);
+      if (!g) return;
+      const x = g.t[0]; const y0 = g.t[1];
+      const free = (EDGE_BOTTOM - y0 >= 70)
+        && sheet.boxes.every(o => o === b || o.y + o.h + TAB_H < y0 || o.x - 3 > x || o.x + o.w + 3 < x)
+        && polys.every(pl => pl.every((p, i) => {
+          if (!i) return true;
+          const [ax, ay] = pl[i - 1]; const [bx, by] = p;
+          const minX = Math.min(ax, bx) - 3; const maxX = Math.max(ax, bx) + 3;
+          const minY = Math.min(ay, by); const maxY = Math.max(ay, by);
+          return maxX < x || minX > x || maxY <= y0 + 0.5 || minY > EDGE_BOTTOM;
+        }));
+      b.offPage = { kind: g.l.kind, startY: y0, edgeY: free ? EDGE_BOTTOM : undefined };
+      if (free) polys.push([[x, y0], [x, EDGE_BOTTOM]]);
+    });
+
+    // ---- лист-продолжение: линия к каждому корню входит от верхнего края
+    if (!job.unit) sheet.boxes.filter(b => b.isSheetRoot).forEach(b => {
+      const l = linkTo.get(b.node);
+      const x = b.x + b.w / 2; const y1 = b.y - (b.inTab ? TAB_H : 0);
+      sheet.lines.push({
+        kind: l ? l.kind : 'rs485', d: `M ${x} ${EDGE_TOP} L ${x} ${y1}`, start: [x, EDGE_TOP], end: [x, y1],
+        portName: '', cable: l ? l.cable : '', labelX: x, labelY: (EDGE_TOP + 4 + y1) / 2, labelLen: y1 - EDGE_TOP - 4,
+        wavesStart: false, incoming: b.node,
+      });
+      if (l) sheet.kinds.add(l.kind);
     });
     const addRows = (parent: WNode, pName: string) => parent.children.forEach(l => rows.push({
       sheet: number, from: pName, port: l.portName, to: [l.to.title, l.to.subtitle].filter(Boolean).join(', '),
@@ -344,6 +387,8 @@ export const layoutWiring = (model: WiringModel): LayoutResult => {
     if (from) {
       const row = rows.find(r => r.sheet === from.number && r.article === b.node.productId && r.to === [b.node.title, b.node.subtitle].filter(Boolean).join(', '));
       b.fromNote = `от листа ${from.number}${row ? `, ${row.port}` : ''}`;
+      const ln = sh.lines.find(l => l.incoming === b.node);
+      if (ln) ln.portName = b.fromNote;
     }
   }));
 
