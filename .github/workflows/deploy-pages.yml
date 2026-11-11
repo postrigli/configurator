@@ -1,8 +1,14 @@
 name: Deploy to GitHub Pages
 
+# Основной конфигуратор (ветка main) публикуется в /configurator/,
+# тестовый стенд со схемой подключения (ветка claude/project-thread-e1fa5e)
+# — в /configurator/wiring/. Сборка main не меняется: те же npm run build и dist.
 on:
   push:
     branches: [main]
+  workflow_run:
+    workflows: ["Wiring branch check"]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
@@ -14,17 +20,43 @@ concurrency:
   group: pages
   cancel-in-progress: true
 
+env:
+  WIRING_BRANCH: claude/project-thread-e1fa5e
+
 jobs:
   build:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: main
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
       - run: npm ci
       - run: npm run build
+
+      # Тестовый стенд: если ветки со схемой нет, шаги пропускаются и main публикуется как обычно.
+      - name: Check wiring branch
+        id: wiring
+        run: |
+          if git ls-remote --exit-code --heads origin "$WIRING_BRANCH" >/dev/null; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v4
+        if: steps.wiring.outputs.exists == 'true'
+        with:
+          ref: ${{ env.WIRING_BRANCH }}
+          path: wiring-src
+      - name: Build wiring test stand
+        if: steps.wiring.outputs.exists == 'true'
+        working-directory: wiring-src
+        run: |
+          npm ci
+          npx vite build --base=/configurator/wiring/ --outDir "$GITHUB_WORKSPACE/dist/wiring"
+
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist
