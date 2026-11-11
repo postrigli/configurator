@@ -326,6 +326,7 @@ const App: React.FC = () => {
                   onHideItem={handleHideItem}
                   customOrderNumber={state.customOrderNumber}
                   onUpdateOrderNumber={(val) => handleUpdate({ customOrderNumber: val })}
+                  appState={state}
                 />
               </div>
             </div>
