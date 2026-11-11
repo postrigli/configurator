@@ -11,14 +11,18 @@ import { PANEL_START, PANEL_V40 } from './panelImages';
 export const PAGE_W = 841.89;
 export const PAGE_H = 595.28;
 const MARGIN = 24;
-const CONTENT_BOTTOM = 546;
-const MAX_SLOTS = 14;
-const MAX_SLOT_W = 128;
-const BOX_H = 42;
+const CONTENT_BOTTOM = 550;
+const CONTENT_W = PAGE_W - 2 * MARGIN;
+const BOX_W = 72;       // ширина коробки устройства
+const GAP_X = 7;        // минимальный зазор между коробками
+const ROW_CAP = Math.floor((CONTENT_W + GAP_X) / (BOX_W + GAP_X)); // коробок в этаже
+const BOX_H = 38;
+const MAX_ROWS = 3;      // рядов в одном этаже (конечные устройства)
+const BYPASS_PAD = 10;  // отступ вертикалей обхода от коробок
 const TAB_H = 7;
 const LEVEL_STEP = 5;   // шаг между полками, пт
-const FIRST_GAP = 12;   // от клеммы до первой полки
-const DROP = 64;        // минимальная длина последнего вертикального отрезка (под подписи)
+const FIRST_GAP = 10;   // от клеммы до первой полки
+const DROP = 50;        // минимальная длина последнего вертикального отрезка (под подписи)
 export const CORNER = 4;
 
 export interface PanelSpec { src: string; srcW: number; srcH: number; ports: Record<string, [number, number]>; antenna: [number, number] }
@@ -102,7 +106,6 @@ export const layoutWiring = (model: WiringModel): LayoutResult => {
       root: pend.unit ? pend.unit.root : ({ id: 'virt', kind: 'group', title: '', children: (pend.roots || []).map(r => ({ to: r, portKeys: [], tabs: [], portName: '', kind: 'rs485', cable: '', label: '' })) } as WNode),
     };
     pinned.forEach(r => sheetOf.set(r, number));
-    const collapsedHere: WNode[] = [];
     const sheet: LSheet = {
       number, title: '', portDots: [], boxes: [], lines: [], kinds: new Set(),
     };
@@ -115,9 +118,9 @@ export const layoutWiring = (model: WiringModel): LayoutResult => {
     const rootPorts: Record<string, [number, number]> = {};
     if (job.unit) {
       const spec = PANELS[job.unit.model];
-      const w = job.unit.model === 'ec01v40' ? 600 : 500;
+      const w = job.unit.model === 'ec01v40' ? 260 : 230;
       const h = w * spec.srcH / spec.srcW;
-      const x = (PAGE_W - w) / 2; const y = 64;
+      const x = (PAGE_W - w) / 2; const y = 60;
       sheet.image = { src: spec.src, x, y, w, h };
       Object.entries(spec.ports).forEach(([k, [px, py]]) => { rootPorts[k] = [x + px * w / spec.srcW, y + py * h / spec.srcH]; });
       srcY = Math.max(...Object.values(rootPorts).map(p => p[1]));
@@ -144,139 +147,171 @@ export const layoutWiring = (model: WiringModel): LayoutResult => {
     };
     walk(job.root, 0);
     const shown = (n: WNode): boolean => expanded.has(n) && n.children.length > 0;
-    const leaves = (n: WNode): number => shown(n) ? n.children.reduce((s, l) => s + leaves(l.to), 0) : 1;
-    const visibleDepth = (n: WNode, d = 0): number => shown(n) ? Math.max(...n.children.map(l => visibleDepth(l.to, d + 1))) : d;
-    const collapse = (maxDepth: number) => {
-      // глубже maxDepth не раскрываем
-      expanded.forEach(n => { if (n !== job.root && !pinned.has(n) && (depthOf.get(n) || 0) >= maxDepth) expanded.delete(n); });
+    const descendants = (n: WNode): number => n.children.reduce((s2, l) => s2 + 1 + descendants(l.to), 0);
+    // Этажи: этаж 0 — всё, что подключено к блоку (или корни листа-продолжения), этаж 1 — к ним и т.д.
+    // Внутри этажа порядок «в глубину», поэтому линии соседних этажей идут в том же порядке, что и выходы.
+    const floors = (): WNode[][] => {
+      const F: WNode[][] = [];
+      const rec = (n: WNode, d: number) => {
+        if (!shown(n)) return;
+        n.children.forEach(l => { (F[d] = F[d] || []).push(l.to); rec(l.to, d + 1); });
+      };
+      rec(job.root, 0);
+      return F;
     };
-    while (leaves(job.root) > MAX_SLOTS) {
-      const cands = [...expanded].filter(n => n !== job.root && !pinned.has(n) && shown(n));
+    const canCollapse = (n: WNode) => n !== job.root && !pinned.has(n) && shown(n);
+    // Родитель каждого узла этажа и точки, откуда к нему идут линии.
+    const parentMap = (F: WNode[][], fi: number) => {
+      const m = new Map<WNode, { p: WNode; l: WLink }>();
+      (fi === 0 ? [job.root] : F[fi - 1]).forEach(p => { if (shown(p)) p.children.forEach(l => m.set(l.to, { p, l })); });
+      return m;
+    };
+    // Как разложить этаж: одним рядом или (если все устройства этажа — конечные) несколькими рядами;
+    // линии к нижним рядам обходят верхние ряды справа. null — не помещается.
+    const rowsFor = (floor: WNode[], pm: Map<WNode, { p: WNode; l: WLink }>): { rows: WNode[][]; nB: number } | null => {
+      if (floor.length <= ROW_CAP) return { rows: [floor], nB: 0 };
+      if (floor.some(shown)) return null;
+      for (let R = 2; R <= MAX_ROWS; R++) {
+        const per = Math.ceil(floor.length / R);
+        const rws: WNode[][] = [];
+        for (let i = 0; i < floor.length; i += per) rws.push(floor.slice(i, i + per));
+        const nB = rws.slice(1).flat().reduce((a, x) => a + (pm.has(x) ? Math.max(1, pm.get(x)!.l.portKeys.length) : 0), 0);
+        const cap = Math.floor((CONTENT_W - BYPASS_PAD - LEVEL_STEP * nB + GAP_X) / (BOX_W + GAP_X));
+        if (per <= cap) return { rows: rws, nB };
+      }
+      return null;
+    };
+    // 1) этаж не помещается по ширине → самая большая группа уровнем выше уходит на лист-продолжение
+    for (;;) {
+      const F = floors();
+      const f = F.findIndex((row, fi) => !rowsFor(row, parentMap(F, fi)));
+      if (f < 0) break;
+      let cands = f >= 1 ? F[f - 1].filter(canCollapse) : [];
+      if (!cands.length) cands = F[f].filter(canCollapse);
       if (!cands.length) break;
-      cands.sort((a, b) => (depthOf.get(b)! - depthOf.get(a)!) || (leaves(b) - leaves(a)));
-      const pick = cands.find(c => leaves(c) > 1) || cands[0];
-      expanded.delete(pick);
+      cands.sort((a, b) => (b.children.length - a.children.length) || (descendants(b) - descendants(a)));
+      expanded.delete(cands[0]);
     }
 
-    // ---- горизонталь: дерево, листья по слотам, родитель над серединой своей группы
-    let sw = 0; let boxW = 0;
-    const cxOf = new Map<WNode, number>();
-    const computeX = () => {
-      cxOf.clear();
-      const slots = leaves(job.root);
-      sw = Math.min(MAX_SLOT_W, (PAGE_W - 2 * MARGIN) / Math.max(1, slots));
-      boxW = Math.min(sw - 8, 118);
-      const left = (PAGE_W - sw * slots) / 2;
-      let slot = 0;
-      const px = (n: WNode): number => {
-        let cx: number;
-        if (shown(n)) { const cs = n.children.map(l => px(l.to)); cx = (cs[0] + cs[cs.length - 1]) / 2; }
-        else { cx = left + sw * (slot + 0.5); slot++; }
-        cxOf.set(n, cx);
-        return cx;
-      };
-      job.root.children.forEach(l => px(l.to));
-    };
-    // источники линий родителя (x), чтобы точно посчитать число полок
-    const srcXs = (n: WNode): number[] => {
-      if (n === job.root) return n.children.flatMap(l => l.portKeys.map(k => (rootPorts[k] || [PAGE_W / 2])[0]));
-      const bx = cxOf.get(n)! - boxW / 2;
-      const bw = boxW;
-      const labels = tabLabels(n, bw);
-      return n.children.flatMap(l => l.portKeys.map((_, k) => bx + bw * (labels.indexOf(l.tabs[k] ?? l.tabs[0]) + 0.5) / labels.length));
-    };
-    const tgtXs = (n: WNode): number[] => n.children.flatMap(l => l.portKeys.map((_, k) => {
-      const c = cxOf.get(l.to)!; const m = l.portKeys.length;
-      return m === 1 ? c : c - boxW / 2 + boxW * (k + 1) / (m + 1);
-    }));
-    const fanLevels = (n: WNode) => {
-      const s = srcXs(n); const t = tgtXs(n);
-      let L = 0; let R = 0;
-      s.forEach((x, i) => { if (t[i] < x - 0.5) L++; else if (t[i] > x + 0.5) R++; });
-      return Math.max(1, L, R);
-    };
-    const levelYs = (): number[] => {
-      const ys: number[] = [];
+    // ---- геометрия этажей: x по источникам линий, y по числу полок в промежутках
+    interface Seg { l: WLink; s: [number, number]; t: [number, number]; level: number; level2: number; gBase: number; subBase: number; track?: number }
+    let boxes = new Map<WNode, LBox>();
+    let segsAll: Seg[] = [];
+    let bottom = 0;
+    const build = () => {
+      boxes = new Map(); segsAll = []; bottom = 0;
+      const F = floors();
       let prevBottom = fanBase;
-      const D = visibleDepth(job.root);
-      for (let d = 1; d <= D; d++) {
-        const parents = [...expanded].filter(n => (depthOf.get(n) || 0) === d - 1 && shown(n));
-        if (!job.unit && d === 1) { ys.push(80); prevBottom = 80 + BOX_H; continue; }
-        const lv = Math.max(1, ...parents.map(fanLevels));
-        const y = prevBottom + (d === 1 ? 0 : TAB_H) + FIRST_GAP + LEVEL_STEP * (lv - 1) + DROP + TAB_H;
-        ys.push(y);
-        prevBottom = y + BOX_H;
-      }
-      return ys;
+      F.forEach((floor, fi) => {
+        const pm = parentMap(F, fi);
+        const srcPts = (n: WNode): [number, number][] => {
+          const pl = pm.get(n);
+          if (!pl) return [];
+          const { p, l } = pl;
+          if (p === job.root) return job.unit ? l.portKeys.map(k => rootPorts[k] || [PAGE_W / 2, srcY]) : [];
+          const pb = boxes.get(p)!;
+          return l.portKeys.map((_, k) => tabPoint(pb, l.tabs[k] ?? l.tabs[0]));
+        };
+        const lay = rowsFor(floor, pm);
+        const rowsOf = lay ? lay.rows : [floor];
+        const nB = lay ? lay.nB : 0;
+        // если не помещается даже так — коробки сужаются
+        const w = lay ? BOX_W : Math.max(30, (CONTENT_W + GAP_X) / floor.length - GAP_X);
+        const S = w + GAP_X;
+        const rightLimit = nB ? PAGE_W - MARGIN - BYPASS_PAD - LEVEL_STEP * nB : PAGE_W - MARGIN;
+        const cxOf = new Map<WNode, number>();
+        rowsOf.forEach(row => {
+          const desired = row.map(n => { const ps = srcPts(n); return ps.length ? ps.reduce((a, q) => a + q[0], 0) / ps.length : PAGE_W / 2; });
+          placeRow(desired, w, S, rightLimit).forEach((c, i) => cxOf.set(row[i], c));
+        });
+        const maxRight = Math.max(...floor.map(n => cxOf.get(n)! + w / 2));
+        const trackStart = maxRight + BYPASS_PAD / 2 + 2;
+        const segs: (Seg & { row: number })[] = [];
+        let bi = 0;
+        rowsOf.forEach((row, r) => row.forEach(n => {
+          const ps = srcPts(n); const pl = pm.get(n);
+          ps.forEach((s0, k) => {
+            const m = ps.length; const c = cxOf.get(n)!;
+            const tx = m === 1 ? c : c - w / 2 + w * (k + 1) / (m + 1);
+            segs.push({ l: pl!.l, s: s0, t: [tx, 0], level: 0, level2: 0, gBase: prevBottom, subBase: 0, row: r, track: r ? trackStart + LEVEL_STEP * bi++ : undefined });
+          });
+        }));
+        // промежуток над этажом: все линии, в т.ч. обходящие (до своей вертикали обхода)
+        const proxG = segs.map(g => ({ s: g.s, t: [g.track ?? g.t[0], 0] as [number, number], level: 0 }));
+        const lvG = assignLevels(proxG);
+        proxG.forEach((p, i) => { segs[i].level = p.level; });
+        const rowY: number[] = [];
+        rowY[0] = (!job.unit && fi === 0) ? 80 : prevBottom + FIRST_GAP + LEVEL_STEP * (lvG - 1) + DROP + TAB_H;
+        for (let r = 1; r < rowsOf.length; r++) {
+          const sub = segs.filter(g => g.row === r);
+          const base = rowY[r - 1] + BOX_H;
+          const prox = sub.map(g => ({ s: [g.track!, 0] as [number, number], t: g.t, level: 0 }));
+          const lv = assignLevels(prox);
+          prox.forEach((p, i) => { sub[i].level2 = p.level; sub[i].subBase = base; });
+          rowY[r] = base + FIRST_GAP + LEVEL_STEP * (lv - 1) + DROP + TAB_H;
+        }
+        segs.forEach(g => { g.t[1] = rowY[g.row] - ((g.l.to.inTab && g.l.portKeys.length === 1) ? TAB_H : 0); });
+        segsAll.push(...segs);
+        rowsOf.forEach((row, r) => row.forEach(n => {
+          const c = cxOf.get(n)!;
+          const b: LBox = { node: n, x: c - w / 2, y: rowY[r], w, h: BOX_H, outTabs: [], inTab: n.inTab, isSheetRoot: pinned.has(n) };
+          if (shown(n)) setTabs(n, b);
+          boxes.set(n, b);
+        }));
+        const lastY = rowY[rowY.length - 1];
+        prevBottom = lastY + BOX_H + (floor.some(shown) ? TAB_H : 0);
+        bottom = lastY + BOX_H;
+      });
     };
-    let ys: number[] = [];
-    for (let D = 3; D >= 1; D--) {
-      collapse(D);
-      computeX();
-      ys = levelYs();
-      if (!ys.length || ys[ys.length - 1] + BOX_H <= CONTENT_BOTTOM) break;
+    // 2) этажи не помещаются по высоте → по одной самой большой группе с нижнего уровня уходят на продолжение
+    for (;;) {
+      build();
+      if (bottom <= CONTENT_BOTTOM) break;
+      const F = floors();
+      let picked: WNode | undefined;
+      for (let f = F.length - 2; f >= 0 && !picked; f--) {
+        picked = F[f].filter(canCollapse).sort((a, b) => descendants(b) - descendants(a))[0];
+      }
+      if (!picked) break;
+      expanded.delete(picked);
     }
 
     // ---- коробки
-    const boxes = new Map<WNode, LBox>();
-    const place = (n: WNode, d: number) => {
-      const cx = cxOf.get(n)!;
-      const b: LBox = { node: n, x: cx - boxW / 2, y: ys[d - 1], w: boxW, h: BOX_H, outTabs: [], inTab: n.inTab, isSheetRoot: pinned.has(n) };
-      boxes.set(n, b);
-      sheet.boxes.push(b);
-      if (shown(n)) n.children.forEach(l => place(l.to, d + 1));
-      else if (n.children.length) collapsedHere.push(n);
-    };
-    job.root.children.forEach(l => place(l.to, 1));
+    const collapsedHere: WNode[] = [];
+    floors().forEach(row => row.forEach(n => {
+      sheet.boxes.push(boxes.get(n)!);
+      if (!shown(n) && n.children.length) collapsedHere.push(n);
+    }));
 
     // ---- линии
     const parentName = job.unit ? `${job.unit.root.title}${model.units.length > 1 ? ` (блок ${job.unit.index})` : ''}` : '';
-    const drawFan = (parent: WNode, srcOf: (l: WLink, k: number) => [number, number], pName: string, base = 0) => {
-      type Seg = { l: WLink; s: [number, number]; t: [number, number] };
-      const segs: Seg[] = [];
-      parent.children.forEach(l => {
-        const b = boxes.get(l.to)!;
-        l.portKeys.forEach((_, k) => {
-          const n = l.portKeys.length;
-          const tx = n === 1 ? b.x + b.w / 2 : b.x + b.w * (k + 1) / (n + 1);
-          segs.push({ l, s: srcOf(l, k), t: [tx, b.y - (b.inTab && n === 1 ? TAB_H : 0)] });
-        });
+    segsAll.forEach(g => {
+      const [sx, sy] = g.s; const [tx, ty] = g.t;
+      const py = Math.max(sy, g.gBase) + FIRST_GAP + LEVEL_STEP * g.level;
+      let pts: [number, number][]; let labelTop: number;
+      if (g.track !== undefined) {
+        const py2 = g.subBase + FIRST_GAP + LEVEL_STEP * g.level2;
+        pts = [[sx, sy], [sx, py], [g.track, py], [g.track, py2], [tx, py2], [tx, ty]];
+        labelTop = py2;
+      } else if (Math.abs(tx - sx) < 0.5) {
+        pts = [[sx, sy], [tx, ty]]; labelTop = Math.max(sy + 6, ty - DROP);
+      } else {
+        pts = [[sx, sy], [sx, py], [tx, py], [tx, ty]]; labelTop = py;
+      }
+      sheet.lines.push({
+        kind: g.l.kind, d: roundedPath(pts), start: [sx, sy], end: [tx, ty], portName: g.l.portName, cable: g.l.cable,
+        labelX: tx, labelY: (labelTop + ty) / 2, labelLen: ty - labelTop, wavesStart: isWireless(g.l.kind),
       });
-      // уровни полок: левые — по возрастанию, правые — по убыванию индекса
-      const level = new Array(segs.length).fill(0);
-      let li = 0;
-      segs.forEach((g, i) => { if (g.t[0] < g.s[0] - 0.5) level[i] = li++; });
-      let ri = 0;
-      for (let i = segs.length - 1; i >= 0; i--) if (segs[i].t[0] > segs[i].s[0] + 0.5) level[i] = ri++;
-      segs.forEach((g, i) => {
-        const [sx, sy] = g.s; const [tx, ty] = g.t;
-        const py = Math.max(sy, base) + FIRST_GAP + LEVEL_STEP * level[i];
-        const dx = tx - sx;
-        let d: string; let labelTop: number;
-        if (Math.abs(dx) < 0.5) {
-          d = `M ${sx} ${sy} L ${tx} ${ty}`; labelTop = Math.max(sy + 6, ty - DROP);
-        } else {
-          const r = Math.min(CORNER, Math.abs(dx) / 2, (py - sy) / 1.5);
-          const sg = Math.sign(dx);
-          d = `M ${sx} ${sy} L ${sx} ${py - r} Q ${sx} ${py} ${sx + sg * r} ${py} L ${tx - sg * r} ${py} Q ${tx} ${py} ${tx} ${py + r} L ${tx} ${ty}`;
-          labelTop = py;
-        }
-        sheet.lines.push({
-          kind: g.l.kind, d, start: [sx, sy], end: [tx, ty], portName: g.l.portName, cable: g.l.cable,
-          labelX: tx, labelY: (labelTop + ty) / 2, labelLen: ty - labelTop, wavesStart: isWireless(g.l.kind),
-        });
-        sheet.kinds.add(g.l.kind);
-      });
-      parent.children.forEach(l => rows.push({
-        sheet: number, from: pName, port: l.portName, to: [l.to.title, l.to.subtitle].filter(Boolean).join(', '),
-        article: l.to.productId || '', cable: l.cable || (l.kind === 'radio' ? 'радио 868 МГц' : l.kind === 'lora' ? 'радио LoRa' : ''), kind: l.kind,
-      }));
-    };
+      sheet.kinds.add(g.l.kind);
+    });
+    const addRows = (parent: WNode, pName: string) => parent.children.forEach(l => rows.push({
+      sheet: number, from: pName, port: l.portName, to: [l.to.title, l.to.subtitle].filter(Boolean).join(', '),
+      article: l.to.productId || '', cable: l.cable || (l.kind === 'radio' ? 'радио 868 МГц' : l.kind === 'lora' ? 'радио LoRa' : ''), kind: l.kind,
+    }));
 
-    // от корня
     if (job.unit) {
       const wirelessKey = job.unit.model === 'ec01v40' ? 'RADIO' : 'LORA';
-      drawFan(job.root, (l, k) => rootPorts[l.portKeys[k]] || [PAGE_W / 2, srcY], parentName, fanBase);
+      addRows(job.root, parentName);
       job.root.children.forEach(l => {
         if (isWireless(l.kind)) return;
         l.portKeys.forEach(k => { const p = rootPorts[k]; if (p) sheet.portDots.push({ x: p[0], y: p[1], kind: l.kind }); });
@@ -286,19 +321,12 @@ export const layoutWiring = (model: WiringModel): LayoutResult => {
         sheet.wirelessPort = { ax: antennaAt[0], ay: antennaAt[1], x: p[0], y: p[1], kind: job.unit.model === 'ec01v40' ? 'radio' : 'lora', label: job.unit.model === 'ec01v40' ? 'Радио 868 МГц' : 'LoRa' };
       }
     }
-    // от раскрытых коробок
-    boxes.forEach((b, n) => {
-      if (!shown(n)) return;
-      setTabs(n, b);
-      drawFan(n, (l, k) => tabPoint(b, l.tabs[k] ?? l.tabs[0]), nodeLabel(n));
-    });
-
+    floors().forEach(row => row.forEach(n => { if (shown(n)) addRows(n, nodeLabel(n)); }));
     // свернутые группы → листы-продолжения; маленькие группы собираются на один лист
-    const fullLeaves = (n: WNode, d = 0): number => (d < 2 && n.children.length) ? n.children.reduce((s2, l) => s2 + fullLeaves(l.to, d + 1), 0) : 1;
     let chunk: WNode[] = []; let used = 0;
     collapsedHere.forEach(n => {
-      const c = Math.min(MAX_SLOTS, fullLeaves(n));
-      if (chunk.length && used + c > MAX_SLOTS) { queue.push({ roots: chunk }); chunk = []; used = 0; }
+      const c = Math.min(2 * ROW_CAP - 2, Math.max(1, n.children.length));
+      if (chunk.length && (used + c > 2 * ROW_CAP - 2 || chunk.length >= ROW_CAP)) { queue.push({ roots: chunk }); chunk = []; used = 0; }
       chunk.push(n); used += c;
     });
     if (chunk.length) queue.push({ roots: chunk });
@@ -324,7 +352,7 @@ export const layoutWiring = (model: WiringModel): LayoutResult => {
 
 // Выходные «язычки» коробки: по одному на каждый уникальный порт детей, равномерно по нижней грани.
 export const tabLabels = (n: WNode, w: number): string[] => {
-  if (n.outs && w / n.outs.length >= 9) return n.outs;
+  if (n.outs && w / n.outs.length >= 7) return n.outs;
   const labels: string[] = [];
   n.children.forEach(l => l.tabs.forEach(t => { if (!labels.includes(t)) labels.push(t); }));
   return labels;
@@ -337,4 +365,59 @@ const setTabs = (n: WNode, b: LBox) => {
 const tabPoint = (b: LBox, label: string): [number, number] => {
   const t = b.outTabs.find(x => x.label === label) || b.outTabs[0];
   return [t ? t.x : b.x + b.w / 2, b.y + b.h + TAB_H];
+};
+
+// Ряд коробок в исходном порядке как можно ближе к желаемым x (изотоническая регрессия, PAV),
+// с шагом не меньше S и в пределах полей листа. Возвращает центры.
+const placeRow = (desired: number[], w: number, S: number, right = PAGE_W - MARGIN): number[] => {
+  const n = desired.length;
+  const blocks: { sum: number; cnt: number }[] = [];
+  desired.forEach((d, i) => {
+    blocks.push({ sum: d - i * S, cnt: 1 });
+    while (blocks.length > 1) {
+      const a = blocks[blocks.length - 2]; const b = blocks[blocks.length - 1];
+      if (a.sum / a.cnt <= b.sum / b.cnt) break;
+      a.sum += b.sum; a.cnt += b.cnt; blocks.pop();
+    }
+  });
+  const z: number[] = [];
+  blocks.forEach(b => { for (let k = 0; k < b.cnt; k++) z.push(b.sum / b.cnt); });
+  const lo = MARGIN + w / 2; const hi = Math.max(lo, right - w / 2 - (n - 1) * S);
+  return z.map((v, i) => Math.min(Math.max(v, lo), hi) + i * S);
+};
+
+// Уровни полок в промежутке между этажами. Линии идут в том же порядке, что и выходы, поэтому
+// пересечений нет, если: у линий «влево» полка ниже у более правой, у линий «вправо» — у более левой.
+// Уровень повышается только там, где горизонтальные участки перекрываются. Возвращает число уровней.
+const assignLevels = (segs: { s: [number, number]; t: [number, number]; level: number }[]): number => {
+  const PAD = 4;
+  let max = 0;
+  const left = segs.filter(g => g.t[0] < g.s[0] - 0.5);
+  left.forEach((g, j) => {
+    let lv = 0;
+    for (let i = 0; i < j; i++) if (left[i].s[0] > g.t[0] - PAD) lv = Math.max(lv, left[i].level + 1);
+    g.level = lv; max = Math.max(max, lv + 1);
+  });
+  const right = segs.filter(g => g.t[0] > g.s[0] + 0.5);
+  for (let j = right.length - 1; j >= 0; j--) {
+    const g = right[j];
+    let lv = 0;
+    for (let i = j + 1; i < right.length; i++) if (right[i].s[0] < g.t[0] + PAD) lv = Math.max(lv, right[i].level + 1);
+    g.level = lv; max = Math.max(max, lv + 1);
+  }
+  return Math.max(1, max);
+};
+
+// Ортогональная ломаная со скруглёнными углами (радиус CORNER, но не больше половины отрезка).
+const roundedPath = (pts: [number, number][]): string => {
+  let d = `M ${pts[0][0]} ${pts[0][1]}`;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const [ax, ay] = pts[i - 1]; const [bx, by] = pts[i]; const [cx, cy] = pts[i + 1];
+    const l1 = Math.hypot(bx - ax, by - ay); const l2 = Math.hypot(cx - bx, cy - by);
+    if (l1 < 0.01 || l2 < 0.01) continue;
+    const r = Math.min(CORNER, l1 / 2, l2 / 2);
+    d += ` L ${bx - (bx - ax) / l1 * r} ${by - (by - ay) / l1 * r} Q ${bx} ${by} ${bx + (cx - bx) / l2 * r} ${by + (cy - by) / l2 * r}`;
+  }
+  const z = pts[pts.length - 1];
+  return d + ` L ${z[0]} ${z[1]}`;
 };

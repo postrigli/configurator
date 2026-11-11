@@ -38,6 +38,9 @@ const s = StyleSheet.create({
   tip: { flexDirection: 'row', marginBottom: 2.5 },
 });
 
+// На схеме подпись короче, чем в таблице: «4 жилы 0,5 мм²» → «4×0,5 мм²».
+const shortCable = (c: string) => c.replace(/(\d+) жил[аы]?\s*/g, '$1×');
+
 const LineSample: React.FC<{ kind: LineKind }> = ({ kind }) => {
   const st = LINE_STYLE[kind];
   return (
@@ -92,7 +95,7 @@ const BoxView: React.FC<{ b: LBox }> = ({ b }) => (
       <View style={[s.tab, { left: b.x + b.w / 2 - 11, top: b.y - 7, width: 22 }]}><Text style={s.tabText}>{b.inTab}</Text></View>
     ) : null}
     {b.outTabs.map((t, i) => {
-      const w = Math.min(20, Math.max(8, b.w / b.outTabs.length - 1.5));
+      const w = Math.min(20, Math.max(5.5, b.w / b.outTabs.length - 1.2));
       return (
         <View key={i} style={[s.tab, { left: t.x - w / 2, top: b.y + b.h, width: w }, t.used === false ? { backgroundColor: '#FFFFFF', borderColor: '#D5D9DE' } : {}]}><Text style={[s.tabText, t.used === false ? { color: '#B0B5BC' } : {}]}>{t.label}</Text></View>
       );
@@ -152,7 +155,7 @@ const SheetPage: React.FC<{ sh: LSheet; order: string; total: number }> = ({ sh,
       return (
         <React.Fragment key={`l${i}`}>
           {l.portName && l.kind !== 'radio' && l.kind !== 'lora' ? mk(l.portName, -4.2) : null}
-          {l.cable ? mk(l.cable, 4.2) : null}
+          {l.cable ? mk(shortCable(l.cable), 4.2) : null}
         </React.Fragment>
       );
     })}
