@@ -178,10 +178,11 @@ export const layoutWiring = (model: WiringModel): LayoutResult => {
     };
     // Как разложить этаж: одним рядом или (если все устройства этажа — конечные) несколькими рядами;
     // линии к нижним рядам обходят верхние ряды справа. null — не помещается.
+    let rowLimit = MAX_ROWS;
     const rowsFor = (floor: WNode[], pm: Map<WNode, { p: WNode; l: WLink }>): { rows: WNode[][]; nB: number } | null => {
       if (floor.length <= ROW_CAP) return { rows: [floor], nB: 0 };
       if (floor.some(shown)) return null;
-      for (let R = 2; R <= MAX_ROWS; R++) {
+      for (let R = 2; R <= rowLimit; R++) {
         const per = Math.ceil(floor.length / R);
         const rws: WNode[][] = [];
         for (let i = 0; i < floor.length; i += per) rws.push(floor.slice(i, i + per));
@@ -282,7 +283,11 @@ export const layoutWiring = (model: WiringModel): LayoutResult => {
       for (let f = F.length - 2; f >= 0 && !picked; f--) {
         picked = F[f].filter(canCollapse).sort((a, b) => descendants(b) - descendants(a))[0];
       }
-      if (!picked) break;
+      if (!picked) {
+        // группировать больше некуда: меньше рядов, коробки уже
+        if (rowLimit > 1) { rowLimit--; continue; }
+        break;
+      }
       expanded.delete(picked);
     }
 
