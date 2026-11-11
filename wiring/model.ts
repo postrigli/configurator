@@ -75,7 +75,7 @@ const SHORT_NAMES: Record<string, string> = {
   ec01017: 'Беспр. датчик дыма', ec01068: 'Датчик CO', ec01016: 'Сирена', 'ec01016-1': 'Сирена комбинир.',
   ec01019: 'Брелок охраны', ec01091: 'Термостат RS485', ec01080: 'Термостат LoRa', ec01114: 'Датчик пола NTC',
   ec01025: 'Блок 10 реле', ec01033: 'Разветвитель RS485', ec01107: 'Разветвитель RS485 DIN',
-  ec01055: 'Разветвитель контактов', ec01060: 'Блок смесит. контуров', ec01096: 'Адаптер LoRa',
+  ec01055: 'Адресный разветвитель', ec01060: 'Блок смесит. контуров', ec01096: 'Адаптер LoRa',
   ec01079: 'Беспр. реле LoRa', ec01030: 'Датчик влажности RS485', ec01026: 'Датчик сети 220В',
   ec01029: 'Датчик уровня', ec01054: 'Беспр. датчик влажности', ec01043: 'Беспр. датчик открытия',
   ec01042: 'Адаптер OpenTherm', ec01057: 'Адаптер OpenTherm', ec01045: 'Адаптер E-Bus', ec01058: 'Адаптер Navien',
@@ -392,7 +392,7 @@ export const buildWiring = (state: AppState, items: CartItem[]): WiringModel => 
     .forEach(id => rs.push(dev(id, 'добавлено вручную', { inTab: 'ДОП' })));
 
   const splitterIds = [...Array(qty('ec01033')).fill('ec01033'), ...Array(qty('ec01107')).fill('ec01107')] as string[];
-  const splitters = splitterIds.map((id, i) => dev(id, splitterIds.length > 1 ? `№${i + 1}` : undefined, { kind: 'expander', inTab: 'ДОП', outs: Array.from({ length: 8 }, (_, k) => String(k + 1)) }));
+  const splitters = splitterIds.map((id, i) => dev(id, splitterIds.length > 1 ? `№${i + 1}` : undefined, { kind: 'expander', inTab: 'ДОП', outs: Array.from({ length: SPLITTER_OUTS }, (_, k) => String(k + 1)) }));
   const rsLabel = CABLE.rs485;
   if (!splitters.length) {
     rs.forEach((d, i) => {
@@ -405,7 +405,7 @@ export const buildWiring = (state: AppState, items: CartItem[]): WiringModel => 
     const queue = [...rs];
     while (queue.length && si < splitters.length) {
       const sp = splitters[si];
-      const isLastOut = out === 8;
+      const isLastOut = out === SPLITTER_OUTS;
       if (isLastOut && si + 1 < splitters.length) {
         link(sp, splitters[si + 1], 'rs485', `Выход ${out}`, [String(out)], [String(out)], rsLabel);
         si++; out = 1; continue;
@@ -413,7 +413,7 @@ export const buildWiring = (state: AppState, items: CartItem[]): WiringModel => 
       const d = queue.shift()!;
       link(sp, d, 'rs485', `Выход ${out}`, [String(out)], [String(out)], rsLabel);
       out++;
-      if (out > 8) { si++; out = 1; }
+      if (out > SPLITTER_OUTS) { si++; out = 1; }
     }
     queue.forEach(d => miss(d.productId || 'ec01033', 1, 'не хватает выходов разветвителей RS485'));
     // разветвители, до которых не дошли устройства
@@ -427,6 +427,9 @@ export const buildWiring = (state: AppState, items: CartItem[]): WiringModel => 
 
   return { units, unconnected, notes };
 };
+
+// Разветвитель RS485 (ec01033 / ec01107): 10 гнёзд, одно — вход, 9 выходов; последний может вести к следующему разветвителю.
+const SPLITTER_OUTS = 9;
 
 export const V40_PORT_ORDER = ['DOP', 'D1', 'D2', 'D3', 'D4', 'D5', 'T1', 'T2', 'T3', 'R1', 'R2', 'R3', 'S2', 'S1', 'RADIO'];
 export const START_PORT_ORDER = ['CSH', 'PU', 'R1', 'T1', 'T2', 'D1', 'DOP', 'LORA'];
