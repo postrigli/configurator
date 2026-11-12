@@ -115,7 +115,7 @@ const BoxView: React.FC<{ b: LBox }> = ({ b }) => b.offPage ? <OffPageLabel b={b
       <View style={[s.tab, { left: b.x + b.w / 2 - 11, top: b.y - 7, width: 22 }]}><Text style={s.tabText}>{b.inTab}</Text></View>
     ) : null}
     {b.outTabs.map((t, i) => {
-      const w = Math.min(20, Math.max(5.5, b.w / b.outTabs.length - 1.2));
+      const w = t.w;
       return (
         <View key={i} style={[s.tab, { left: t.x - w / 2, top: b.y + b.h, width: w }, t.used === false ? { backgroundColor: '#FFFFFF', borderColor: '#D5D9DE' } : {}]}><Text style={[s.tabText, t.used === false ? { color: '#B0B5BC' } : {}]}>{t.label}</Text></View>
       );

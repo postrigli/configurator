@@ -57,7 +57,7 @@ export const PANELS: Record<'ec01v40' | 'ec01105', PanelSpec> = {
 export interface LBox {
   node: WNode;
   x: number; y: number; w: number; h: number;
-  outTabs: { label: string; x: number; used?: boolean }[];
+  outTabs: { label: string; x: number; w: number; used?: boolean }[];
   inTab?: string;
   refSheet?: number;      // группа продолжается на листе N
   isSheetRoot?: boolean;
@@ -443,7 +443,14 @@ export const tabLabels = (n: WNode, w: number): string[] => {
 const setTabs = (n: WNode, b: LBox) => {
   const labels = tabLabels(n, b.w);
   const used = new Set(n.children.flatMap(l => l.tabs));
-  b.outTabs = labels.map((label, i) => ({ label, x: b.x + b.w * (i + 0.5) / labels.length, used: used.has(label) }));
+  // ширина язычка — по длине подписи («ПИТ» шире цифр); остаток ширины коробки делится поровну
+  const need = labels.map(l => Math.max(5.5, l.length * 2.9 + 1.8));
+  const slot = b.w / Math.max(1, labels.length);
+  const extra = Math.max(0, b.w - need.reduce((a, x) => a + x + 1.2, 0)) / Math.max(1, labels.length);
+  const ws = need.map(x => Math.min(20, Math.max(x, Math.min(slot - 1.2, x + extra))));
+  const span = ws.reduce((a, x) => a + x + 1.2, 0);
+  let cx = b.x + (b.w - span) / 2;
+  b.outTabs = labels.map((label, i) => { const x = cx + 0.6 + ws[i] / 2; cx += ws[i] + 1.2; return { label, x, w: ws[i], used: used.has(label) }; });
 };
 const tabPoint = (b: LBox, label: string): [number, number] => {
   const t = b.outTabs.find(x => x.label === label) || b.outTabs[0];
