@@ -4,6 +4,7 @@ import { PrintLayout } from './PrintLayout';
 import { WiringLayout } from './WiringLayout';
 import { buildWiring } from '../wiring/model';
 import { layoutWiring } from '../wiring/layout';
+import { makePdfFile, savePdf, shareFile, downloadFile, pdfName } from './savePdf';
 import { AppState, CartItem, Product } from '../types';
 import { PRODUCTS, OPTIONAL_ITEMS } from '../constants';
 
@@ -29,6 +30,12 @@ export const Cart: React.FC<CartProps> = ({ items, onManualAdd, onRemoveManual, 
   const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
   const [isGeneratingWiring, setIsGeneratingWiring] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+  // файл готов, но браузер телефона просит ещё одно нажатие, чтобы открыть «Поделиться»
+  const [readyFile, setReadyFile] = useState<File | null>(null);
+
+  const deliver = async (file: File) => {
+    if (await savePdf(file) === 'needs-tap') setReadyFile(file);
+  };
 
   const filteredProducts = useMemo(() => {
     const term = searchTerm.toLowerCase();
@@ -46,15 +53,7 @@ export const Cart: React.FC<CartProps> = ({ items, onManualAdd, onRemoveManual, 
       setIsGeneratingPDF(true);
       
       const blob = await pdf(<PrintLayout items={items} customOrderNumber={customOrderNumber} />).toBlob();
-      const url = URL.createObjectURL(blob);
-      
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `ectoControl_configurator_${customOrderNumber || 'new'}.pdf`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
+      await deliver(makePdfFile(blob, pdfName('ectoControl_configurator', customOrderNumber)));
     } catch (error) {
       console.error('Error generating PDF:', error);
       alert('Произошла ошибка при создании PDF файла.');
@@ -71,14 +70,7 @@ export const Cart: React.FC<CartProps> = ({ items, onManualAdd, onRemoveManual, 
       const layout = layoutWiring(model);
       const orderNumber = customOrderNumber && customOrderNumber.trim() !== '' ? customOrderNumber : 'б/н';
       const blob = await pdf(<WiringLayout model={model} layout={layout} orderNumber={orderNumber} />).toBlob();
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `ectoControl_схема_подключения_${customOrderNumber || 'new'}.pdf`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
+      await deliver(makePdfFile(blob, pdfName('ectoControl_skhema_podklyucheniya', customOrderNumber)));
     } catch (error) {
       console.error('Error generating wiring PDF:', error);
       alert('Произошла ошибка при создании схемы подключения.');
@@ -284,6 +276,29 @@ export const Cart: React.FC<CartProps> = ({ items, onManualAdd, onRemoveManual, 
                 className="px-5 py-2 bg-ecto-gold text-white font-bold rounded-lg hover:bg-[#e6aa00] transition-colors"
               >
                 Добавить
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {readyFile && (
+        <div className="fixed inset-0 bg-black/40 flex items-end sm:items-center justify-center z-[60] p-4" onClick={() => setReadyFile(null)}>
+          <div className="bg-white rounded-2xl p-5 w-full max-w-sm shadow-2xl" onClick={e => e.stopPropagation()}>
+            <div className="font-bold text-ecto-dark mb-1">Файл готов</div>
+            <div className="text-sm text-gray-500 mb-4 break-all">{readyFile.name}</div>
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                className="px-4 py-3 bg-ecto-gold text-white font-bold rounded-xl"
+                onClick={() => { const f = readyFile; setReadyFile(null); shareFile(f).catch(() => {}); }}
+              >
+                Поделиться
+              </button>
+              <button
+                className="px-4 py-3 border border-gray-200 rounded-xl font-semibold text-ecto-dark"
+                onClick={() => { const f = readyFile; setReadyFile(null); downloadFile(f); }}
+              >
+                Открыть
               </button>
             </div>
           </div>
