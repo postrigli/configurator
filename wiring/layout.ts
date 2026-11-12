@@ -29,6 +29,10 @@ const WAVE_FIRST_GAP = 26; // то же под волнами радио у ад
 const WAVE_GAP_START = 17; // волны у адаптера занимают ~12 пт вниз
 const WAVE_GAP_END = 15;   // волны у датчика занимают ~10 пт вверх
 const DROP = 50;        // минимальная длина последнего вертикального отрезка (под подписи)
+// плотный вариант листа: включается, только если иначе часть устройств ушла бы на продолжение
+const DROP_TIGHT = 47;
+const FIRST_GAP_TIGHT = 7;
+const CONT_ROOT_Y_TIGHT = 124;
 export const CORNER = 4;
 
 export interface PanelSpec { src: string; srcW: number; srcH: number; ports: Record<string, [number, number]>; antenna: [number, number] }
@@ -184,14 +188,24 @@ export const layoutWiring = (model: WiringModel): LayoutResult => {
     let rowLimit = MAX_ROWS;
     const rowsFor = (floor: WNode[], pm: Map<WNode, { p: WNode; l: WLink }>): { rows: WNode[][]; nB: number } | null => {
       if (floor.length <= ROW_CAP) return { rows: [floor], nB: 0 };
-      if (floor.some(shown)) return null;
+      // устройства со своими подключениями (термостат с датчиком пола и т.п.) — только в нижнем ряду,
+      // чтобы их линии вниз не пересекали другие ряды
+      const firstShown = floor.findIndex(shown);
       for (let R = 2; R <= rowLimit; R++) {
         const per = Math.ceil(floor.length / R);
+        let lastStart = per * (R - 1);
+        if (lastStart >= floor.length) lastStart = floor.length - 1;
+        if (firstShown >= 0 && firstShown < lastStart) lastStart = firstShown;
+        const upper = floor.slice(0, lastStart);
+        const uPer = R > 1 ? Math.ceil(upper.length / (R - 1)) : 0;
+        if (!uPer) continue;
         const rws: WNode[][] = [];
-        for (let i = 0; i < floor.length; i += per) rws.push(floor.slice(i, i + per));
+        for (let i = 0; i < upper.length; i += uPer) rws.push(upper.slice(i, i + uPer));
+        rws.push(floor.slice(lastStart));
+        const maxPer = Math.max(...rws.map(r => r.length));
         const nB = rws.slice(1).flat().reduce((a, x) => a + (pm.has(x) ? Math.max(1, pm.get(x)!.l.portKeys.length) : 0), 0);
         const cap = Math.floor((CONTENT_W - BYPASS_PAD - LEVEL_STEP * nB + GAP_X) / (BOX_W + GAP_X));
-        if (per <= cap) return { rows: rws, nB };
+        if (maxPer <= cap) return { rows: rws, nB };
       }
       return null;
     };
@@ -212,7 +226,9 @@ export const layoutWiring = (model: WiringModel): LayoutResult => {
     let boxes = new Map<WNode, LBox>();
     let segsAll: Seg[] = [];
     let bottom = 0;
+    let tight = false;
     const build = () => {
+      const drop = tight ? DROP_TIGHT : DROP; const gap0 = tight ? FIRST_GAP_TIGHT : FIRST_GAP;
       boxes = new Map(); segsAll = []; bottom = 0;
       const F = floors();
       let prevBottom = fanBase;
@@ -254,18 +270,18 @@ export const layoutWiring = (model: WiringModel): LayoutResult => {
         const proxG = segs.map(g => ({ s: g.s, t: [g.track ?? g.t[0], 0] as [number, number], level: 0 }));
         const lvG = assignLevels(proxG);
         // радио от коробки-адаптера: под волнами нужен отступ до первой полки
-        const fg = segs.some(g => g.wStart) ? WAVE_FIRST_GAP : FIRST_GAP;
+        const fg = segs.some(g => g.wStart) ? WAVE_FIRST_GAP : gap0;
         segs.forEach(g => { g.fg = fg; });
         proxG.forEach((p, i) => { segs[i].level = p.level; });
         const rowY: number[] = [];
-        rowY[0] = (!job.unit && fi === 0) ? CONT_ROOT_Y : prevBottom + fg + LEVEL_STEP * (lvG - 1) + DROP + TAB_H;
+        rowY[0] = (!job.unit && fi === 0) ? (tight ? CONT_ROOT_Y_TIGHT : CONT_ROOT_Y) : prevBottom + fg + LEVEL_STEP * (lvG - 1) + drop + TAB_H;
         for (let r = 1; r < rowsOf.length; r++) {
           const sub = segs.filter(g => g.row === r);
           const base = rowY[r - 1] + BOX_H;
           const prox = sub.map(g => ({ s: [g.track!, 0] as [number, number], t: g.t, level: 0 }));
           const lv = assignLevels(prox);
           prox.forEach((p, i) => { sub[i].level2 = p.level; sub[i].subBase = base; });
-          rowY[r] = base + FIRST_GAP + LEVEL_STEP * (lv - 1) + DROP + TAB_H;
+          rowY[r] = base + gap0 + LEVEL_STEP * (lv - 1) + drop + TAB_H;
         }
         segs.forEach(g => { g.t[1] = rowY[g.row] - ((g.l.to.inTab && g.l.portKeys.length === 1) ? TAB_H : 0); });
         segsAll.push(...segs);
@@ -282,8 +298,12 @@ export const layoutWiring = (model: WiringModel): LayoutResult => {
     };
     // 2) этажи не помещаются по высоте → по одной самой большой группе с нижнего уровня уходят на продолжение
     for (;;) {
-      build();
+      // сначала обычные отступы; если не влезает — плотные (меньше зазоры), и только потом перенос на продолжение
+      tight = false; build();
       if (bottom <= CONTENT_BOTTOM) break;
+      tight = true; build();
+      if (bottom <= CONTENT_BOTTOM) break;
+      tight = false;
       const F = floors();
       let picked: WNode | undefined;
       for (let f = F.length - 2; f >= 0 && !picked; f--) {
@@ -292,6 +312,7 @@ export const layoutWiring = (model: WiringModel): LayoutResult => {
       if (!picked) {
         // группировать больше некуда: меньше рядов, коробки уже
         if (rowLimit > 1) { rowLimit--; continue; }
+        build();
         break;
       }
       expanded.delete(picked);
@@ -312,11 +333,11 @@ export const layoutWiring = (model: WiringModel): LayoutResult => {
       const py = Math.max(sy, g.gBase) + g.fg + LEVEL_STEP * g.level;
       let pts: [number, number][]; let labelTop: number;
       if (g.track !== undefined) {
-        const py2 = g.subBase + FIRST_GAP + LEVEL_STEP * g.level2;
+        const py2 = g.subBase + (tight ? FIRST_GAP_TIGHT : FIRST_GAP) + LEVEL_STEP * g.level2;
         pts = [[sx, sy], [sx, py], [g.track, py], [g.track, py2], [tx, py2], [tx, ty]];
         labelTop = py2;
       } else if (Math.abs(tx - sx) < 0.5) {
-        pts = [[sx, sy], [tx, ty]]; labelTop = Math.max(sy + 6, ty - DROP);
+        pts = [[sx, sy], [tx, ty]]; labelTop = Math.max(sy + 6, ty - (tight ? DROP_TIGHT : DROP));
       } else {
         pts = [[sx, sy], [sx, py], [tx, py], [tx, ty]]; labelTop = py;
       }
