@@ -526,16 +526,37 @@ const buildV40 = (state: AppState, items: CartItem[]): PlannedWiring => {
   type Load = { n: WNode; kind: LineKind; cable: string };
   const mk = (title: string, subtitle?: string, kind: LineKind = 'power230', cable = CABLE.power230): Load => ({ n: node('load', title, { subtitle }), kind, cable });
   const loads = new Map<WNode, Load[]>(U.map(u => [u, []]));
+  const C = UNIT_CIRCUITS;
+  const used = new Map<WNode, number>(U.map(u => [u, 0]));
+  const roomOf = (u: WNode) => C - used.get(u)!;
+  const mostRoom = () => [...zoneUnits].sort((a, b) => roomOf(b) - roomOf(a))[0];
+
+  // Котельная перегружена (больше 19 контуров) → группами на блок зон: сначала насосы отопления, потом смесители.
+  // Котлы и насос бойлера всегда остаются на блоке 1.
+  const base1 = boilers.length + (state.boilerPump ? 1 : 0);
+  let pumpsUnit = U0; let mixUnit = U0;
+  const u1 = () => Math.max(pumpsUnit === U0 ? state.heatingPumps : 0, mixUnit === U0 ? state.mixingValves : 0) + base1;
+  if (N > 1 && u1() > C && state.heatingPumps > 0) pumpsUnit = mostRoom();
+  if (N > 1 && u1() > C && state.mixingValves > 0) mixUnit = pumpsUnit !== U0 ? pumpsUnit : mostRoom();
+  used.set(U0, u1());
+  if (pumpsUnit !== U0 || mixUnit !== U0) {
+    const z = pumpsUnit !== U0 ? pumpsUnit : mixUnit;
+    used.set(z, used.get(z)! + Math.max(pumpsUnit === z ? state.heatingPumps : 0, mixUnit === z ? state.mixingValves : 0));
+  }
+
   const boilerLoads: Load[] = [];
   if (state.boilerPump) boilerLoads.push(mk('Насос бойлера ГВС'));
-  for (let i = 1; i <= state.heatingPumps; i++) boilerLoads.push(mk(`Насос отопления ${i}`));
   if (state.recirculationPump) boilerLoads.push(mk('Насос рециркуляции'));
   const neptun = state.neptun12 + state.neptun34 + state.neptun1;
   if (neptun > 0) boilerLoads.push(mk(`Краны Neptun × ${neptun}`, [state.neptun12 && `1/2"×${state.neptun12}`, state.neptun34 && `3/4"×${state.neptun34}`, state.neptun1 && `1"×${state.neptun1}`].filter(Boolean).join(', '), 'low12', CABLE.neptun));
   manualByType('RELAY').forEach(id => boilerLoads.push({ n: dev(id, 'добавлено вручную', { kind: 'load' }), kind: 'power230', cable: CABLE.power230 }));
+  const pumps: Load[] = [];
+  for (let i = 1; i <= state.heatingPumps; i++) pumps.push(mk(`Насос отопления ${i}`));
+  loads.get(pumpsUnit)!.push(...pumps);
   loads.get(U0)!.push(...boilerLoads);
 
-  // зоны: зона и её 2-й контур всегда на одном блоке; поровну между блоками зон
+  // Зоны: зона и её 2-й контур всегда на одном блоке. Блоки зон заполняются до 19 контуров,
+  // остаток зон переходит на блок 1 одной группой (сколько там поместится), лишнее — на последний блок зон.
   const zoneSub = qty('ec01099') ? 'сервоприводы ec01099' : 'сервоприводы коллектора';
   const z2 = Math.min(state.zonesWithTwoSources, state.zones);
   const zoneGroups: Load[][] = [];
@@ -544,20 +565,23 @@ const buildV40 = (state: AppState, items: CartItem[]): PlannedWiring => {
     if (i <= z2) g.push(mk(`Зона ${i}, 2-й контур`, 'тёплый пол / радиаторы'));
     zoneGroups.push(g);
   }
-  const zoneCircuits = zoneGroups.reduce((s, g) => s + g.length, 0);
-  const perZoneUnit = Math.ceil(zoneCircuits / zoneUnits.length);
-  let zu = 0; let onUnit = 0;
-  zoneGroups.forEach(g => {
-    if (onUnit > 0 && onUnit + g.length > perZoneUnit && zu < zoneUnits.length - 1) { zu++; onUnit = 0; }
-    loads.get(zoneUnits[zu])!.push(...g);
-    onUnit += g.length;
-  });
-  const boilerCircuits = Math.max(state.mixingValves, state.heatingPumps) + boilers.length + (state.boilerPump ? 1 : 0);
-  if (N > 1) {
-    const over = zoneUnits.filter(u => loads.get(u)!.filter(l => l.n.title.startsWith('Зона')).length > UNIT_CIRCUITS);
-    if (over.length) notes.push(`На блоке зон больше ${UNIT_CIRCUITS} контуров: проверьте, хватит ли блоков ectoControl.`);
-    if (boilerCircuits > UNIT_CIRCUITS) notes.push(`На блоке 1 (котельная) больше ${UNIT_CIRCUITS} контуров управления.`);
+  const putZone = (u: WNode, g: Load[]) => { loads.get(u)!.push(...g); used.set(u, used.get(u)! + g.length); };
+  const restZones: Load[][] = [];
+  if (N === 1) zoneGroups.forEach(g => putZone(U0, g));
+  else {
+    let zi = 0;
+    zoneGroups.forEach(g => {
+      while (zi < zoneUnits.length && roomOf(zoneUnits[zi]) < g.length) zi++;
+      if (zi < zoneUnits.length) putZone(zoneUnits[zi], g); else restZones.push(g);
+    });
+    restZones.forEach(g => {
+      if (roomOf(U0) >= g.length) { putZone(U0, g); return; }
+      // целиком не помещается нигде: зону и её 2-й контур можно развести по свободным местам
+      g.forEach(l => putZone([U0, ...zoneUnits].find(u => roomOf(u) >= 1) || zoneUnits[zoneUnits.length - 1], [l]));
+    });
   }
+  const objects = Math.max(state.mixingValves, state.heatingPumps) + boilers.length + (state.boilerPump ? 1 : 0) + state.zones + state.zonesWithTwoSources;
+  if (objects > 3 * C) notes.push(`Объектов управления больше ${3 * C} (${objects}): такую систему лучше проработать с инженером ectoControl.`);
 
   // ---------------------------------------------------------------- реле: сначала ec01025 блока, потом реле блока
   let manual025 = manualQty('ec01025');
@@ -603,7 +627,7 @@ const buildV40 = (state: AppState, items: CartItem[]): PlannedWiring => {
     link(b, node('load', `Сервопривод смесителя ${c}`, { subtitle: '230 В, 3-точечный' }), 'power230', `M${k}`, [`M${k}`], [`M${k}`], CABLE.mixer);
   }
   mixers.forEach(e => { if (!e.children.length) e.reserve = true; });
-  bus(U0).mixers.push(...mixers);
+  bus(mixUnit).mixers.push(...mixers);
 
   // ---------------------------------------------------------------- датчики температуры (Т)
   const tFree = new Map<WNode, number[]>(U.map(u => [u, [1, 2, 3]]));

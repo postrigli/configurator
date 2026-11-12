@@ -219,6 +219,8 @@ export const calculateCart = (state: AppState): CartItem[] => {
   let finalBaseQty = logicSum >= 39 ? 3 : (logicSum >= 20 ? 2 : 1);
   if (usage.RADIO > finalBaseQty * 32) finalBaseQty = Math.ceil(usage.RADIO / 32);
   if (usage.PORT123 > finalBaseQty * 2) finalBaseQty = Math.max(finalBaseQty, Math.ceil(usage.PORT123 / 2));
+  // LoRa: до 32 устройств на блок v4.0 (свой адаптер ec01096 на каждом), максимум 3 блока = 96 устройств.
+  if (!isStart && usage.LORA > finalBaseQty * 32) finalBaseQty = Math.max(finalBaseQty, Math.min(3, Math.ceil(usage.LORA / 32)));
 
   // v4.0: расширители, разветвители, питание и замены датчиков считает общий расчёт схемы
   // (wiring/model.ts → buildV40): так корзина и схема подключения всегда совпадают.
