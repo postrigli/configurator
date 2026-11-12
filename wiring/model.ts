@@ -379,7 +379,7 @@ const buildStart = (state: AppState, items: CartItem[]): WiringModel => {
     link(a, boiler, 'boiler', bus, ['OUT'], ['Котёл'], CABLE.boilerBus);
     rs.push(a);
   });
-  rs.push(...relayExpanders, ...contactExp, ...mixerBlocks, ...loraAdapters);
+  rs.push(...mixerBlocks, ...relayExpanders, ...contactExp, ...loraAdapters);
   const ntc = isStart ? 0 : Math.min(qty('ec01114'), state.wiredThermostats);
   for (let i = 1; i <= qty('ec01091'); i++) {
     const t = dev('ec01091', qty('ec01091') > 1 ? `№${i}` : undefined, { inTab: 'ДОП' });
@@ -500,7 +500,7 @@ const buildV40 = (state: AppState, items: CartItem[]): PlannedWiring => {
   const zoneFirst = N > 1 ? [...U.slice(1), U0] : [U0];
 
   // Шина ДОП каждого блока: группы в порядке, в котором они встают на разветвитель.
-  type Bus = { adapters: WNode[]; relays: WNode[]; contacts: WNode[]; mixers: WNode[]; lora: WNode[]; thermostats: WNode[]; temps: WNode[]; manual: WNode[] };
+  type Bus = { adapters: WNode[]; mixers: WNode[]; relays: WNode[]; contacts: WNode[]; lora: WNode[]; thermostats: WNode[]; temps: WNode[]; manual: WNode[] };
   const buses = new Map<WNode, Bus>(U.map(u => [u, { adapters: [], relays: [], contacts: [], mixers: [], lora: [], thermostats: [], temps: [], manual: [] }]));
   const bus = (u: WNode) => buses.get(u)!;
   const num = (n: number, total: number) => total > 1 ? `№${n}` : undefined;
@@ -774,7 +774,7 @@ const buildV40 = (state: AppState, items: CartItem[]): PlannedWiring => {
   const allSplitters: WNode[] = [];
   U.forEach((u, ui) => {
     const b = bus(u);
-    const rs = [...b.adapters, ...b.relays, ...b.contacts, ...b.mixers, ...b.lora, ...b.thermostats, ...b.temps, ...b.manual];
+    const rs = [...b.adapters, ...b.mixers, ...b.relays, ...b.contacts, ...b.lora, ...b.thermostats, ...b.temps, ...b.manual];
     const ids = ui === 0 ? manualSplit : [];
     const needed = rs.length > 1 ? Math.ceil((rs.length - 1) / (SPLITTER_OUTS - 1)) : 0;
     const total = Math.max(needed, ids.length);
