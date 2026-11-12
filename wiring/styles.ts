@@ -2,7 +2,7 @@ import { LineKind } from './model';
 
 // Цвета и вид линий. Один цвет на один тип линии; опасное ~230 В — самая толстая линия.
 export const LINE_STYLE: Record<LineKind, { color: string; width: number; dash?: string; name: string }> = {
-  power230: { color: '#D62828', width: 2.4, name: '~230 В: реле → насос, сервопривод, зона' },
+  power230: { color: '#D62828', width: 2.4, name: '~230 В: от реле к насосу, сервоприводу, зоне' },
   boiler:   { color: '#7B3FA0', width: 1.6, name: 'Котёл: сухой контакт или цифровая шина' },
   rs485:    { color: '#1F4E9C', width: 1.6, name: 'Шина RS485 (ДОП), 4 жилы' },
   temp:     { color: '#23955B', width: 1.4, name: 'Датчик температуры (Т), 3 жилы' },

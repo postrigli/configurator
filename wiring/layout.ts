@@ -63,7 +63,7 @@ export interface LBox {
   isSheetRoot?: boolean;
   fromNote?: string;      // «от листа 1, ДОП»
   /** Группа на другом листе: коробки нет, линия кончается стрелкой (у края листа, если путь вниз свободен). */
-  offPage?: { kind: LineKind; startY: number; edgeY?: number };
+  offPage?: { kind: LineKind; startY: number; edgeY?: number; side?: 'L' | 'R'; sideX?: number; port?: string; below?: boolean; labelLeft?: boolean };
 }
 
 export interface LLine {
@@ -222,11 +222,14 @@ export const layoutWiring = (model: WiringModel): LayoutResult => {
     }
 
     // ---- геометрия этажей: x по источникам линий, y по числу полок в промежутках
-    interface Seg { l: WLink; s: [number, number]; t: [number, number]; level: number; level2: number; gBase: number; subBase: number; track?: number; fg: number; wStart: boolean }
+    interface Seg { l: WLink; s: [number, number]; t: [number, number]; level: number; level2: number; gBase: number; subBase: number; track?: number; fg: number; wStart: boolean; side?: 'L' | 'R' }
     let boxes = new Map<WNode, LBox>();
     let segsAll: Seg[] = [];
     let bottom = 0;
     let tight = false;
+    // группы на другом листе, линия к которым уходит к боковому краю: коробки в ряду не занимают
+    const sideOff = new Map<WNode, 'L' | 'R'>();
+    const deep = new Set<WNode>();
     const build = () => {
       const drop = tight ? DROP_TIGHT : DROP; const gap0 = tight ? FIRST_GAP_TIGHT : FIRST_GAP;
       boxes = new Map(); segsAll = []; bottom = 0;
@@ -242,19 +245,30 @@ export const layoutWiring = (model: WiringModel): LayoutResult => {
           const pb = boxes.get(p)!;
           return l.portKeys.map((_, k) => tabPoint(pb, l.tabs[k] ?? l.tabs[0]));
         };
-        const lay = rowsFor(floor, pm);
-        const rowsOf = lay ? lay.rows : [floor];
+        const placed = floor.filter(n => !sideOff.has(n));
+        const lay = rowsFor(placed, pm);
+        const rowsOf = lay ? lay.rows : [placed];
         const nB = lay ? lay.nB : 0;
         // если не помещается даже так — коробки сужаются
-        const w = lay ? BOX_W : Math.max(30, (CONTENT_W + GAP_X) / floor.length - GAP_X);
+        const w = lay ? BOX_W : Math.max(30, (CONTENT_W + GAP_X) / Math.max(1, placed.length) - GAP_X);
         const S = w + GAP_X;
-        const rightLimit = nB ? PAGE_W - MARGIN - BYPASS_PAD - LEVEL_STEP * nB : PAGE_W - MARGIN;
+        let rightLimit = nB ? PAGE_W - MARGIN - BYPASS_PAD - LEVEL_STEP * nB : PAGE_W - MARGIN;
+        // путь к боковому краю и подпись у него: коробки этажа не заходят в эту полосу (если ряд всё равно помещается)
+        let leftLimit = MARGIN;
+        floor.filter(n => sideOff.has(n)).forEach(n => {
+          const ps = srcPts(n); if (!ps.length) return;
+          const lw = sideLabelW(n, linkTo.get(n)?.portName);
+          if (sideOff.get(n) === 'L') leftLimit = Math.max(leftLimit, Math.max(ps[0][0], MARGIN + lw) + 6);
+          else rightLimit = Math.min(rightLimit, Math.min(ps[0][0], PAGE_W - MARGIN - lw) - 6);
+        });
+        const widest = Math.max(0, ...rowsOf.map(r => r.length));
+        if (rightLimit - leftLimit < widest * S - GAP_X) { leftLimit = MARGIN; rightLimit = nB ? PAGE_W - MARGIN - BYPASS_PAD - LEVEL_STEP * nB : PAGE_W - MARGIN; }
         const cxOf = new Map<WNode, number>();
         rowsOf.forEach(row => {
           const desired = row.map(n => { const ps = srcPts(n); return ps.length ? ps.reduce((a, q) => a + q[0], 0) / ps.length : PAGE_W / 2; });
-          placeRow(desired, w, S, rightLimit).forEach((c, i) => cxOf.set(row[i], c));
+          placeRow(desired, w, S, rightLimit, leftLimit).forEach((c, i) => cxOf.set(row[i], c));
         });
-        const maxRight = Math.max(...floor.map(n => cxOf.get(n)! + w / 2));
+        const maxRight = Math.max(MARGIN, ...placed.map(n => cxOf.get(n)! + w / 2));
         const trackStart = maxRight + BYPASS_PAD / 2 + 2;
         const segs: (Seg & { row: number })[] = [];
         let bi = 0;
@@ -266,6 +280,16 @@ export const layoutWiring = (model: WiringModel): LayoutResult => {
             segs.push({ l: pl!.l, s: s0, t: [tx, 0], level: 0, level2: 0, gBase: prevBottom, subBase: 0, row: r, track: r ? trackStart + LEVEL_STEP * bi++ : undefined, fg: FIRST_GAP, wStart: isWireless(pl!.l.kind) && pl!.p !== job.root });
           });
         }));
+        // линии к боковому краю листа: встают среди линий в порядке выходов
+        floor.filter(n => sideOff.has(n)).forEach(n => {
+          const pl = pm.get(n); const ps = srcPts(n);
+          if (!pl || !ps.length) return;
+          const side = sideOff.get(n)!;
+          const g = { l: pl.l, s: ps[0], t: [side === 'R' ? PAGE_W - MARGIN : MARGIN, 0] as [number, number], level: 0, level2: 0, gBase: prevBottom, subBase: 0, row: 0, fg: FIRST_GAP, wStart: false, side };
+          let at = segs.findIndex(x => x.s[0] > g.s[0]);
+          if (at < 0) at = segs.length;
+          segs.splice(at, 0, g);
+        });
         // промежуток над этажом: все линии, в т.ч. обходящие (до своей вертикали обхода)
         const proxG = segs.map(g => ({ s: g.s, t: [g.track ?? g.t[0], 0] as [number, number], level: 0 }));
         const lvG = assignLevels(proxG);
@@ -283,8 +307,9 @@ export const layoutWiring = (model: WiringModel): LayoutResult => {
           prox.forEach((p, i) => { sub[i].level2 = p.level; sub[i].subBase = base; });
           rowY[r] = base + gap0 + LEVEL_STEP * (lv - 1) + drop + TAB_H;
         }
-        segs.forEach(g => { g.t[1] = rowY[g.row] - ((g.l.to.inTab && g.l.portKeys.length === 1) ? TAB_H : 0); });
+        segs.forEach(g => { g.t[1] = g.side ? rowY[0] - TAB_H - 14 : rowY[g.row] - ((g.l.to.inTab && g.l.portKeys.length === 1) ? TAB_H : 0); });
         segsAll.push(...segs);
+        floor.filter(n => sideOff.has(n)).forEach(n => boxes.set(n, { node: n, x: sideOff.get(n) === 'R' ? PAGE_W - MARGIN : MARGIN, y: 0, w: 0, h: 0, outTabs: [], inTab: n.inTab }));
         rowsOf.forEach((row, r) => row.forEach(n => {
           const c = cxOf.get(n)!;
           const b: LBox = { node: n, x: c - w / 2, y: rowY[r], w, h: BOX_H, outTabs: [], inTab: n.inTab, isSheetRoot: pinned.has(n) };
@@ -297,7 +322,7 @@ export const layoutWiring = (model: WiringModel): LayoutResult => {
       });
     };
     // 2) этажи не помещаются по высоте → по одной самой большой группе с нижнего уровня уходят на продолжение
-    for (;;) {
+    const fitHeight = () => { for (;;) {
       // сначала обычные отступы; если не влезает — плотные (меньше зазоры), и только потом перенос на продолжение
       tight = false; build();
       if (bottom <= CONTENT_BOTTOM) break;
@@ -316,62 +341,191 @@ export const layoutWiring = (model: WiringModel): LayoutResult => {
         break;
       }
       expanded.delete(picked);
+    } };
+    fitHeight();
+
+    // ---- группы на другом листе: линии к ним — с крайних выходов разветвителя
+    const isOff = (n: WNode) => !shown(n) && n.children.length > 0;
+    const sideOf = new Map<WNode, 'L' | 'R'>();
+    // свернутые дети одного разветвителя, от крайнего выхода к внутреннему
+    let offGroups: WNode[][] = [];
+    const reorder = () => {
+      let moved = false; offGroups = [];
+      const parents = [job.root, ...floors().flat()].filter(shown);
+      parents.forEach(p => {
+        const offKids = p.children.filter(l => isOff(l.to));
+        if (!offKids.length) return;
+        const pb = boxes.get(p);
+        const cx = pb ? pb.x + pb.w / 2 : PAGE_W / 2;
+        if (!SPLITTER_IDS.includes(p.productId || '')) {
+          offKids.forEach(l => { const b = boxes.get(l.to); sideOf.set(l.to, (b ? b.x + b.w / 2 : cx) < PAGE_W / 2 ? 'L' : 'R'); });
+          return;
+        }
+        const num = (l: WLink) => (l.portKeys.length === 1 && /^\d+$/.test(l.portKeys[0])) ? +l.portKeys[0] : NaN;
+        const outs = p.children.filter(l => !isNaN(num(l))).sort((a, b) => num(a) - num(b));
+        // следующий разветвитель цепочки остаётся на своём (последнем) выходе
+        const chain = outs.filter(l => SPLITTER_IDS.includes(l.to.productId || ''));
+        const movable = outs.filter(l => !chain.includes(l));
+        const side: 'L' | 'R' = chain.some(l => isOff(l.to)) || cx >= PAGE_W / 2 ? 'R' : 'L';
+        chain.forEach(l => { if (isOff(l.to)) sideOf.set(l.to, 'R'); });
+        const off = movable.filter(l => isOff(l.to));
+        off.forEach(l => sideOf.set(l.to, side));
+        const keep = movable.filter(l => !isOff(l.to));
+        const order = side === 'R' ? [...keep, ...off] : [...off, ...keep];
+        const ports = movable.map(num);
+        order.forEach((l, i) => {
+          const k = ports[i];
+          if (num(l) === k) return;
+          moved = true;
+          l.portKeys = [String(k)]; l.tabs = [String(k)]; l.portName = `Выход ${k}`;
+        });
+        p.children.sort((a, b) => (isNaN(num(a)) ? 1e3 : num(a)) - (isNaN(num(b)) ? 1e3 : num(b)));
+        const grp = p.children.filter(l => isOff(l.to) && sideOf.get(l.to) === side).map(l => l.to);
+        offGroups.push(side === 'R' ? grp.reverse() : grp);
+      });
+      return moved;
+    };
+    for (let i = 0; i < 4 && reorder(); i++) { build(); if (bottom > CONTENT_BOTTOM) fitHeight(); }
+
+    // ---- линии
+    const drawLines = () => {
+      const lines: LLine[] = []; const polys: [number, number][][] = [];
+      const side = new Map<WNode, { py: number; sx: number; poly: [number, number][] }>();
+      segsAll.forEach(g => {
+        const [sx, sy] = g.s; const [tx, ty] = g.t;
+        const py = Math.max(sy, g.gBase) + g.fg + LEVEL_STEP * g.level;
+        let pts: [number, number][]; let labelTop: number;
+        if (g.side) {
+          // к краю: по верхней полке или (если там тесно) низко, над коробками следующего этажа
+          const ex = g.side === 'R' ? PAGE_W - MARGIN - 5 : MARGIN + 5;
+          const y = deep.has(g.l.to) ? Math.max(py, ty) : py;
+          pts = [[sx, sy], [sx, y], [ex, y]];
+          polys.push(pts); side.set(g.l.to, { py: y, sx, poly: pts });
+          lines.push({ kind: g.l.kind, d: roundedPath(pts), start: [sx, sy], end: [ex, y], portName: '', cable: '', labelX: ex, labelY: y, labelLen: 0, wavesStart: false });
+          return;
+        }
+        if (g.track !== undefined) {
+          const py2 = g.subBase + (tight ? FIRST_GAP_TIGHT : FIRST_GAP) + LEVEL_STEP * g.level2;
+          pts = [[sx, sy], [sx, py], [g.track, py], [g.track, py2], [tx, py2], [tx, ty]];
+          labelTop = py2;
+        } else if (Math.abs(tx - sx) < 0.5) {
+          pts = [[sx, sy], [tx, ty]]; labelTop = Math.max(sy + 6, ty - (tight ? DROP_TIGHT : DROP));
+        } else {
+          pts = [[sx, sy], [sx, py], [tx, py], [tx, ty]]; labelTop = py;
+        }
+        polys.push(pts);
+        if (isWireless(g.l.kind)) {
+          // пунктир не заходит на волны: ))) - - - (((
+          pts = pts.map(p => [p[0], p[1]] as [number, number]);
+          if (g.wStart) pts[0][1] = Math.min(pts[0][1] + WAVE_GAP_START, pts[1][1] - 2);
+          const e = pts[pts.length - 1]; e[1] = Math.max(e[1] - WAVE_GAP_END, pts[pts.length - 2][1] + 2);
+        }
+        lines.push({
+          kind: g.l.kind, d: roundedPath(pts), start: [sx, sy], end: [tx, ty], portName: g.l.portName, cable: g.l.cable,
+          labelX: tx, labelY: (labelTop + ty) / 2, labelLen: ty - labelTop, wavesStart: g.wStart,
+        });
+      });
+      return { lines, polys, side };
+    };
+    const allBoxes = () => floors().flat().map(n => boxes.get(n)!).filter(Boolean);
+    const over = (ax1: number, ay1: number, ax2: number, ay2: number, bx1: number, by1: number, bx2: number, by2: number) =>
+      Math.max(Math.min(ax1, ax2), Math.min(bx1, bx2)) <= Math.min(Math.max(ax1, ax2), Math.max(bx1, bx2))
+      && Math.max(Math.min(ay1, ay2), Math.min(by1, by2)) <= Math.min(Math.max(ay1, ay2), Math.max(by1, by2));
+    /** Прямоугольник свободен от линий (кроме своей) и коробок (кроме своей)? */
+    const clearOf = (polys: [number, number][][], own?: WNode, ownPoly?: [number, number][]) => {
+      const segs: [number, number, number, number][] = [];
+      polys.forEach(pl => { if (pl !== ownPoly) for (let i = 1; i < pl.length; i++) segs.push([pl[i - 1][0], pl[i - 1][1], pl[i][0], pl[i][1]]); });
+      const rects = allBoxes().filter(o => o.node !== own && !sideOff.has(o.node)).map(o => [o.x - 1, o.y - TAB_H, o.x + o.w + 1, o.y + o.h + TAB_H] as const);
+      return (rx1: number, ry1: number, rx2: number, ry2: number) => {
+        const bs = segs.filter(q => over(q[0], q[1], q[2], q[3], rx1, ry1, rx2, ry2)); const br = rects.filter(q => over(q[0], q[1], q[2], q[3], rx1, ry1, rx2, ry2));
+        return !bs.length && !br.length;
+      };
+    };
+    // путь вниз от группы свободен до нижнего края листа и есть место для подписи справа или слева от стрелки?
+    const downFit = (n: WNode, polys: [number, number][][]): 'r' | 'l' | null => {
+      const g = segsAll.find(x => x.l.to === n);
+      if (!g || g.side) return null;
+      const x = g.t[0]; const y0 = g.t[1];
+      if (EDGE_BOTTOM - y0 < 40) return null;
+      const ownPoly = polys.find(pl => { const e = pl[pl.length - 1]; return Math.abs(e[0] - x) < 0.5 && Math.abs(e[1] - y0) < 0.5; });
+      const clear = clearOf(polys, n, ownPoly);
+      if (!clear(x - 2.5, y0 + 1, x + 2.5, EDGE_BOTTOM)) return null;
+      const lw = bottomLabelW(n);
+      if (clear(x + 4, EDGE_BOTTOM - BOTTOM_LABEL_H, x + 4 + lw, EDGE_BOTTOM) && x + 4 + lw <= PAGE_W - MARGIN / 2) return 'r';
+      if (clear(x - 4 - lw, EDGE_BOTTOM - BOTTOM_LABEL_H, x - 4, EDGE_BOTTOM) && x - 4 - lw >= MARGIN / 2) return 'l';
+      return null;
+    };
+    // горизонталь к боковому краю ничего не пересекает, а подписи есть место над ней или под ней?
+    const sideFit = (n: WNode, L: ReturnType<typeof drawLines>): 'above' | 'below' | null => {
+      const si = L.side.get(n); if (!si) return null;
+      const sd = sideOff.get(n)!;
+      const ex = sd === 'R' ? PAGE_W - MARGIN : MARGIN;
+      const x1 = Math.min(si.sx, ex) + 0.5; const x2 = Math.max(si.sx, ex) - 0.5; const y = si.py;
+      const lw = sideLabelW(n, linkTo.get(n)?.portName);
+      const lx1 = sd === 'R' ? ex - lw : ex; const lx2 = sd === 'R' ? ex : ex + lw;
+      const clear = clearOf(L.polys, n, si.poly);
+      if (!clear(x1, y - 1.5, x2, y + 1.5)) return null;
+      if (clear(lx1, y - SIDE_LABEL_H - 1.5, lx2, y - 1.5)) return 'above';
+      if (clear(lx1, y + 1.5, lx2, y + SIDE_LABEL_H + 1.5)) return 'below';
+      return null;
+    };
+    let L = drawLines();
+    {
+      const offs = floors().flat().filter(isOff);
+      const want = offs.filter(n => !downFit(n, L.polys));
+      const need = new Set(want);
+      // линия вниз с внешнего выхода перегородила бы путь к краю: внешние тоже уходят вбок
+      offGroups.forEach(g => {
+        const k = Math.max(-1, ...g.map((n, i) => want.includes(n) ? i : -1));
+        for (let i = 0; i < k; i++) if (!want.includes(g[i])) want.push(g[i]);
+      });
+      if (want.length) {
+        want.forEach(n => sideOff.set(n, sideOf.get(n) || 'R'));
+        build(); L = drawLines();
+        for (let it = 0; it < 6 && sideOff.size; it++) {
+          let bad = [...sideOff.keys()].filter(n => !sideFit(n, L));
+          const retry = bad.filter(n => !deep.has(n));
+          if (retry.length) { retry.forEach(n => deep.add(n)); L = drawLines(); bad = [...sideOff.keys()].filter(n => !sideFit(n, L)); }
+          if (!bad.length && bottom <= CONTENT_BOTTOM) break;
+          (bad.length ? bad : [...sideOff.keys()]).forEach(n => sideOff.delete(n));
+          build(); L = drawLines();
+        }
+        // внешние ушли вбок «за компанию», а тем, кому было нужно, не помогло — пусть идут вниз, как раньше
+        const revert = offGroups.flatMap(g => g.some(n => need.has(n) && sideOff.has(n)) ? [] : g.filter(n => sideOff.has(n) && !need.has(n)));
+        if (revert.length) { revert.forEach(n => { sideOff.delete(n); deep.delete(n); }); build(); L = drawLines(); }
+      }
     }
 
     // ---- коробки
     const collapsedHere: WNode[] = [];
     floors().forEach(row => row.forEach(n => {
       sheet.boxes.push(boxes.get(n)!);
-      if (!shown(n) && n.children.length) collapsedHere.push(n);
+      if (isOff(n)) collapsedHere.push(n);
     }));
-
-    // ---- линии
     const parentName = job.unit ? `${job.unit.root.title}${model.units.length > 1 ? ` (блок ${job.unit.index})` : ''}` : '';
-    const polys: [number, number][][] = [];
-    segsAll.forEach(g => {
-      const [sx, sy] = g.s; const [tx, ty] = g.t;
-      const py = Math.max(sy, g.gBase) + g.fg + LEVEL_STEP * g.level;
-      let pts: [number, number][]; let labelTop: number;
-      if (g.track !== undefined) {
-        const py2 = g.subBase + (tight ? FIRST_GAP_TIGHT : FIRST_GAP) + LEVEL_STEP * g.level2;
-        pts = [[sx, sy], [sx, py], [g.track, py], [g.track, py2], [tx, py2], [tx, ty]];
-        labelTop = py2;
-      } else if (Math.abs(tx - sx) < 0.5) {
-        pts = [[sx, sy], [tx, ty]]; labelTop = Math.max(sy + 6, ty - (tight ? DROP_TIGHT : DROP));
-      } else {
-        pts = [[sx, sy], [sx, py], [tx, py], [tx, ty]]; labelTop = py;
-      }
-      polys.push(pts);
-      if (isWireless(g.l.kind)) {
-        // пунктир не заходит на волны: ))) - - - (((
-        pts = pts.map(p => [p[0], p[1]] as [number, number]);
-        if (g.wStart) pts[0][1] = Math.min(pts[0][1] + WAVE_GAP_START, pts[1][1] - 2);
-        const e = pts[pts.length - 1]; e[1] = Math.max(e[1] - WAVE_GAP_END, pts[pts.length - 2][1] + 2);
-      }
-      sheet.lines.push({
-        kind: g.l.kind, d: roundedPath(pts), start: [sx, sy], end: [tx, ty], portName: g.l.portName, cable: g.l.cable,
-        labelX: tx, labelY: (labelTop + ty) / 2, labelLen: ty - labelTop, wavesStart: g.wStart,
-      });
-      sheet.kinds.add(g.l.kind);
-    });
+    L.lines.forEach(l => { sheet.lines.push(l); sheet.kinds.add(l.kind); });
+    const polys = L.polys;
 
-    // ---- уход на другой лист: если ниже по вертикали свободно — линия идёт до нижнего края листа
+    // ---- уход на другой лист: вниз до края листа, к боковому краю или стрелка на месте
     collapsedHere.forEach(n => {
       const b = boxes.get(n)!;
+      const l = linkTo.get(n);
+      const si = L.side.get(n);
+      if (si && sideOff.has(n)) {
+        b.offPage = { kind: l ? l.kind : 'rs485', startY: si.py, side: sideOff.get(n), sideX: sideOff.get(n) === 'R' ? PAGE_W - MARGIN : MARGIN, port: l?.portName, below: sideFit(n, L) === 'below' };
+        return;
+      }
       const g = segsAll.find(x => x.l.to === n);
       if (!g) return;
       const x = g.t[0]; const y0 = g.t[1];
-      const free = (EDGE_BOTTOM - y0 >= 70)
-        && sheet.boxes.every(o => o === b || o.y + o.h + TAB_H < y0 || o.x - 3 > x || o.x + o.w + 3 < x)
-        && polys.every(pl => pl.every((p, i) => {
-          if (!i) return true;
-          const [ax, ay] = pl[i - 1]; const [bx, by] = p;
-          const minX = Math.min(ax, bx) - 3; const maxX = Math.max(ax, bx) + 3;
-          const minY = Math.min(ay, by); const maxY = Math.max(ay, by);
-          return maxX < x || minX > x || maxY <= y0 + 0.5 || minY > EDGE_BOTTOM;
-        }));
-      b.offPage = { kind: g.l.kind, startY: y0, edgeY: free ? EDGE_BOTTOM : undefined };
-      if (free) polys.push([[x, y0], [x, EDGE_BOTTOM]]);
+      const fit = downFit(n, polys);
+      const free = !!fit;
+      b.offPage = { kind: g.l.kind, startY: y0, edgeY: free ? EDGE_BOTTOM : undefined, labelLeft: fit === 'l' };
+      if (free) {
+        polys.push([[x, y0], [x, EDGE_BOTTOM]]);
+        const lw = bottomLabelW(n); const x1 = fit === 'l' ? x - 4 - lw : x + 4; const x2 = x1 + lw; const y1 = EDGE_BOTTOM - BOTTOM_LABEL_H;
+        polys.push([[x1, y1], [x2, y1], [x2, EDGE_BOTTOM], [x1, EDGE_BOTTOM], [x1, y1]]);
+      }
     });
 
     // ---- лист-продолжение: линия к каждому корню входит от верхнего края
@@ -440,6 +594,17 @@ export const tabLabels = (n: WNode, w: number): string[] => {
   n.children.forEach(l => l.tabs.forEach(t => { if (!labels.includes(t)) labels.push(t); }));
   return labels;
 };
+const SPLITTER_IDS = ['ec01033', 'ec01107'];
+/** Подпись у стрелки на другой лист (для оценки ширины). */
+const offTitleOf = (n: WNode) => [n.productId, n.title, n.subtitle].filter(Boolean).join(' ');
+// Подписи «→ лист N» у стрелок на другой лист: всегда горизонтальные (оценка размеров для проверки места)
+export const REF_FONT = 7;      // «→ лист N»
+export const REF_TITLE_FONT = 6; // название группы
+const BOTTOM_LABEL_H = 17;
+const SIDE_LABEL_H = 17;
+const bottomLabelW = (n: WNode) => Math.max(34, offTitleOf(n).length * 3.15);
+const sideLabelW = (n: WNode, port = '') => Math.max(34 + port.length * 3.15, offTitleOf(n).length * 3.15);
+
 const setTabs = (n: WNode, b: LBox) => {
   const labels = tabLabels(n, b.w);
   const used = new Set(n.children.flatMap(l => l.tabs));
@@ -459,7 +624,7 @@ const tabPoint = (b: LBox, label: string): [number, number] => {
 
 // Ряд коробок в исходном порядке как можно ближе к желаемым x (изотоническая регрессия, PAV),
 // с шагом не меньше S и в пределах полей листа. Возвращает центры.
-const placeRow = (desired: number[], w: number, S: number, right = PAGE_W - MARGIN): number[] => {
+const placeRow = (desired: number[], w: number, S: number, right = PAGE_W - MARGIN, left = MARGIN): number[] => {
   const n = desired.length;
   const blocks: { sum: number; cnt: number }[] = [];
   desired.forEach((d, i) => {
@@ -472,7 +637,7 @@ const placeRow = (desired: number[], w: number, S: number, right = PAGE_W - MARG
   });
   const z: number[] = [];
   blocks.forEach(b => { for (let k = 0; k < b.cnt; k++) z.push(b.sum / b.cnt); });
-  const lo = MARGIN + w / 2; const hi = Math.max(lo, right - w / 2 - (n - 1) * S);
+  const lo = left + w / 2; const hi = Math.max(lo, right - w / 2 - (n - 1) * S);
   return z.map((v, i) => Math.min(Math.max(v, lo), hi) + i * S);
 };
 

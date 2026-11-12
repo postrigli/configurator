@@ -2,7 +2,7 @@
 import React from 'react';
 import { Document, Page, View, Text, Image, Svg, Path, Circle, Rect, G, StyleSheet } from '@react-pdf/renderer';
 import { WiringModel, LineKind } from '../wiring/model';
-import { LayoutResult, LSheet, LBox, PAGE_W, PAGE_H } from '../wiring/layout';
+import { LayoutResult, LSheet, LBox, PAGE_W, PAGE_H, REF_FONT, REF_TITLE_FONT } from '../wiring/layout';
 import { LINE_STYLE, KIND_ORDER, MOUNTING_TIPS } from '../wiring/styles';
 
 const GOLD = '#F5A800';
@@ -83,21 +83,47 @@ const boxColors = (b: LBox) => {
 
 const offTitle = (b: LBox) => [b.node.productId, b.node.title, b.node.subtitle].filter(Boolean).join(' ');
 
-// Группа на другом листе: вместо коробки — подпись у стрелки.
+// «→ лист N»: стрелка рисуется векторно (в шрифте Roboto из сборки нет символа «→»).
+const SheetRef: React.FC<{ n?: number; size?: number; align?: 'flex-start' | 'center' | 'flex-end' }> = ({ n, size = REF_FONT, align = 'center' }) => (
+  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: align }}>
+    <Svg width={size * 1.15} height={size * 0.8} viewBox="0 0 10 7">
+      <Path d="M 0 3.5 L 6 3.5" stroke="#C77F00" strokeWidth={1.3} />
+      <Path d="M 5 0.5 L 10 3.5 L 5 6.5 Z" fill="#C77F00" />
+    </Svg>
+    <Text style={{ fontSize: size, color: '#C77F00', fontWeight: 'bold', marginLeft: size * 0.25 }}>лист {n ?? '?'}</Text>
+  </View>
+);
+
+// Группа на другом листе: вместо коробки — горизонтальная подпись у стрелки.
 const OffPageLabel: React.FC<{ b: LBox }> = ({ b }) => {
   const o = b.offPage!;
   const color = LINE_STYLE[o.kind].color;
-  if (o.edgeY !== undefined) {
-    const len = 120; const cy = (o.startY + 10 + o.edgeY) / 2; const x = b.x + b.w / 2;
-    const mk = (text: string, dx: number, bold = false) => (
-      <Text style={[s.lbl, { color: bold ? '#C77F00' : color, fontWeight: bold ? 'bold' : 'normal', fontSize: bold ? 5.6 : 5, left: x + dx - len / 2, top: cy - 3, width: len, transform: 'rotate(-90deg)' }]}>{text}</Text>
+  const title = <Text style={{ fontSize: REF_TITLE_FONT, color: DARK }}>{offTitle(b)}</Text>;
+  if (o.side && o.sideX !== undefined) {
+    const W = 220; const R = o.side === 'R'; const al = R ? 'flex-end' : 'flex-start';
+    return (
+      <View style={{ position: 'absolute', left: R ? o.sideX - W : o.sideX, top: o.below ? o.startY + 1.5 : o.startY - 17.5, width: W, alignItems: al }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+          {o.port ? <Text style={{ fontSize: REF_TITLE_FONT, color, marginRight: 3 }}>{o.port}</Text> : null}
+          <SheetRef n={b.refSheet} />
+        </View>
+        {title}
+      </View>
     );
-    return <>{mk(`→ лист ${b.refSheet ?? '?'}`, -4.4, true)}{mk(offTitle(b), 4.4)}</>;
+  }
+  if (o.edgeY !== undefined) {
+    const W = 220; const x = b.x + b.w / 2; const left = o.labelLeft;
+    return (
+      <View style={{ position: 'absolute', left: left ? x - 4 - W : x + 4, top: o.edgeY - 16.5, width: W, alignItems: left ? 'flex-end' : 'flex-start' }}>
+        <SheetRef n={b.refSheet} align={left ? 'flex-end' : 'flex-start'} />
+        {title}
+      </View>
+    );
   }
   return (
-    <View style={{ position: 'absolute', left: b.x - 4, top: o.startY + 12, width: b.w + 8, alignItems: 'center' }}>
-      <Text style={s.ref}>→ лист {b.refSheet ?? '?'}</Text>
-      <Text style={[s.sub, { color: DARK }]}>{offTitle(b)}</Text>
+    <View style={{ position: 'absolute', left: b.x - 10, top: o.startY + 12, width: b.w + 20, alignItems: 'center' }}>
+      <SheetRef n={b.refSheet} />
+      <Text style={{ fontSize: REF_TITLE_FONT, color: DARK, textAlign: 'center' }}>{offTitle(b)}</Text>
     </View>
   );
 };
@@ -109,7 +135,7 @@ const BoxView: React.FC<{ b: LBox }> = ({ b }) => b.offPage ? <OffPageLabel b={b
       <Text style={s.name}>{b.node.title}</Text>
       {b.node.subtitle ? <Text style={s.sub}>{b.node.subtitle}</Text> : null}
       {b.node.reserve ? <Text style={s.sub}>резерв</Text> : null}
-      {b.refSheet ? <Text style={s.ref}>→ лист {b.refSheet}</Text> : null}
+      {b.refSheet ? <SheetRef n={b.refSheet} size={6} /> : null}
     </View>
     {b.inTab ? (
       <View style={[s.tab, { left: b.x + b.w / 2 - 11, top: b.y - 7, width: 22 }]}><Text style={s.tabText}>{b.inTab}</Text></View>
@@ -158,6 +184,10 @@ const SheetPage: React.FC<{ sh: LSheet; order: string; total: number }> = ({ sh,
       ) : null}
       {sh.boxes.filter(b => b.offPage).map((b, i) => {
         const o = b.offPage!; const st = LINE_STYLE[o.kind]; const x = b.x + b.w / 2;
+        if (o.side && o.sideX !== undefined) {
+          const X = o.sideX; const Y = o.startY; const d = o.side === 'R' ? -5 : 5;
+          return <Path key={`o${i}`} d={`M ${X + d} ${Y - 3} L ${X + d} ${Y + 3} L ${X} ${Y} Z`} fill={st.color} />;
+        }
         const end = o.edgeY ?? o.startY + 10;
         return (
           <G key={`o${i}`}>
