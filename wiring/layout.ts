@@ -25,6 +25,9 @@ const BYPASS_PAD = 10;  // отступ вертикалей обхода от �
 const TAB_H = 7;
 const LEVEL_STEP = 5;   // шаг между полками, пт
 const FIRST_GAP = 10;   // от клеммы до первой полки
+const WAVE_FIRST_GAP = 26; // то же под волнами радио у адаптера
+const WAVE_GAP_START = 17; // волны у адаптера занимают ~12 пт вниз
+const WAVE_GAP_END = 15;   // волны у датчика занимают ~10 пт вверх
 const DROP = 50;        // минимальная длина последнего вертикального отрезка (под подписи)
 export const CORNER = 4;
 
@@ -205,7 +208,7 @@ export const layoutWiring = (model: WiringModel): LayoutResult => {
     }
 
     // ---- геометрия этажей: x по источникам линий, y по числу полок в промежутках
-    interface Seg { l: WLink; s: [number, number]; t: [number, number]; level: number; level2: number; gBase: number; subBase: number; track?: number }
+    interface Seg { l: WLink; s: [number, number]; t: [number, number]; level: number; level2: number; gBase: number; subBase: number; track?: number; fg: number; wStart: boolean }
     let boxes = new Map<WNode, LBox>();
     let segsAll: Seg[] = [];
     let bottom = 0;
@@ -244,15 +247,18 @@ export const layoutWiring = (model: WiringModel): LayoutResult => {
           ps.forEach((s0, k) => {
             const m = ps.length; const c = cxOf.get(n)!;
             const tx = m === 1 ? c : c - w / 2 + w * (k + 1) / (m + 1);
-            segs.push({ l: pl!.l, s: s0, t: [tx, 0], level: 0, level2: 0, gBase: prevBottom, subBase: 0, row: r, track: r ? trackStart + LEVEL_STEP * bi++ : undefined });
+            segs.push({ l: pl!.l, s: s0, t: [tx, 0], level: 0, level2: 0, gBase: prevBottom, subBase: 0, row: r, track: r ? trackStart + LEVEL_STEP * bi++ : undefined, fg: FIRST_GAP, wStart: isWireless(pl!.l.kind) && pl!.p !== job.root });
           });
         }));
         // промежуток над этажом: все линии, в т.ч. обходящие (до своей вертикали обхода)
         const proxG = segs.map(g => ({ s: g.s, t: [g.track ?? g.t[0], 0] as [number, number], level: 0 }));
         const lvG = assignLevels(proxG);
+        // радио от коробки-адаптера: под волнами нужен отступ до первой полки
+        const fg = segs.some(g => g.wStart) ? WAVE_FIRST_GAP : FIRST_GAP;
+        segs.forEach(g => { g.fg = fg; });
         proxG.forEach((p, i) => { segs[i].level = p.level; });
         const rowY: number[] = [];
-        rowY[0] = (!job.unit && fi === 0) ? CONT_ROOT_Y : prevBottom + FIRST_GAP + LEVEL_STEP * (lvG - 1) + DROP + TAB_H;
+        rowY[0] = (!job.unit && fi === 0) ? CONT_ROOT_Y : prevBottom + fg + LEVEL_STEP * (lvG - 1) + DROP + TAB_H;
         for (let r = 1; r < rowsOf.length; r++) {
           const sub = segs.filter(g => g.row === r);
           const base = rowY[r - 1] + BOX_H;
@@ -303,7 +309,7 @@ export const layoutWiring = (model: WiringModel): LayoutResult => {
     const polys: [number, number][][] = [];
     segsAll.forEach(g => {
       const [sx, sy] = g.s; const [tx, ty] = g.t;
-      const py = Math.max(sy, g.gBase) + FIRST_GAP + LEVEL_STEP * g.level;
+      const py = Math.max(sy, g.gBase) + g.fg + LEVEL_STEP * g.level;
       let pts: [number, number][]; let labelTop: number;
       if (g.track !== undefined) {
         const py2 = g.subBase + FIRST_GAP + LEVEL_STEP * g.level2;
@@ -315,9 +321,15 @@ export const layoutWiring = (model: WiringModel): LayoutResult => {
         pts = [[sx, sy], [sx, py], [tx, py], [tx, ty]]; labelTop = py;
       }
       polys.push(pts);
+      if (isWireless(g.l.kind)) {
+        // пунктир не заходит на волны: ))) - - - (((
+        pts = pts.map(p => [p[0], p[1]] as [number, number]);
+        if (g.wStart) pts[0][1] = Math.min(pts[0][1] + WAVE_GAP_START, pts[1][1] - 2);
+        const e = pts[pts.length - 1]; e[1] = Math.max(e[1] - WAVE_GAP_END, pts[pts.length - 2][1] + 2);
+      }
       sheet.lines.push({
         kind: g.l.kind, d: roundedPath(pts), start: [sx, sy], end: [tx, ty], portName: g.l.portName, cable: g.l.cable,
-        labelX: tx, labelY: (labelTop + ty) / 2, labelLen: ty - labelTop, wavesStart: isWireless(g.l.kind),
+        labelX: tx, labelY: (labelTop + ty) / 2, labelLen: ty - labelTop, wavesStart: g.wStart,
       });
       sheet.kinds.add(g.l.kind);
     });

@@ -138,7 +138,7 @@ const SheetPage: React.FC<{ sh: LSheet; order: string; total: number }> = ({ sh,
       {sh.wirelessPort ? (() => {
         const w = sh.wirelessPort; const st = LINE_STYLE[w.kind];
         // от антенны: волны, затем пунктир вправо за рендер и вниз до начала веера
-        const sx = w.ax + 12;
+        const sx = w.ax + 15;
         return (
           <G>
             <G transform={`rotate(-90 ${w.ax + 3} ${w.ay})`}><Waves x={w.ax + 3} y={w.ay} color={st.color} dir={-1} /></G>
@@ -149,7 +149,7 @@ const SheetPage: React.FC<{ sh: LSheet; order: string; total: number }> = ({ sh,
       {sh.lines.filter(l => l.kind === 'radio' || l.kind === 'lora').map((l, i) => (
         <Waves key={`w${i}`} x={l.end[0]} y={l.end[1] - 2} color={LINE_STYLE[l.kind].color} dir={1} />
       ))}
-      {sh.lines.filter(l => l.wavesStart && !sh.wirelessPort).length ? (
+      {sh.lines.some(l => l.wavesStart) ? (
         // источник радио — коробка-адаптер: волны у её нижней грани
         <G>{Array.from(new Set<string>(sh.lines.filter(l => l.wavesStart).map(l => `${l.start[0]}|${l.start[1]}|${l.kind}`))).map((k, i) => {
           const [x, y, kind] = k.split('|');
