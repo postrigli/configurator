@@ -557,13 +557,13 @@ const buildV40 = (state: AppState, items: CartItem[]): PlannedWiring => {
 
   // Зоны: зона и её 2-й контур всегда на одном блоке. Блоки зон заполняются до 19 контуров,
   // остаток зон переходит на блок 1 одной группой (сколько там поместится), лишнее — на последний блок зон.
-  const zoneSub = qty('ec01099') ? 'сервоприводы ec01099' : 'сервоприводы коллектора';
+  const zoneSub = 'тёплый пол / радиаторы';
   const z2 = Math.min(state.zonesWithTwoSources, state.zones);
   const zoneGroups: Load[][] = [];
   for (let i = 1; i <= state.zones; i++) {
-    const g = [mk(`Зона ${i}`, zoneSub)];
-    if (i <= z2) g.push(mk(`Зона ${i}, 2-й контур`, 'тёплый пол / радиаторы'));
-    zoneGroups.push(g);
+    zoneGroups.push(i <= z2
+      ? [mk(`Зона ${i}, 1-й контур`, zoneSub), mk(`Зона ${i}, 2-й контур`, zoneSub)]
+      : [mk(`Зона ${i}`, zoneSub)]);
   }
   const putZone = (u: WNode, g: Load[]) => { loads.get(u)!.push(...g); used.set(u, used.get(u)! + g.length); };
   const restZones: Load[][] = [];
