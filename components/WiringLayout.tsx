@@ -38,7 +38,7 @@ const s = StyleSheet.create({
   tip: { flexDirection: 'row', marginBottom: 2.5 },
 });
 
-// На схеме подпись короче, чем в таблице: «4 жилы 0,5 мм²» → «4×0,5 мм²».
+// На схеме подпись короче, чем в таблице: «4 жилы 0,5 мм» → «4×0,5 мм».
 const shortCable = (c: string) => c.replace(/(\d+) жил[аы]?\s*/g, '$1×');
 
 const LineSample: React.FC<{ kind: LineKind }> = ({ kind }) => {

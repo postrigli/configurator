@@ -465,7 +465,10 @@ export const layoutWiring = (model: WiringModel): LayoutResult => {
       const lx1 = sd === 'R' ? ex - lw : ex; const lx2 = sd === 'R' ? ex : ex + lw;
       const clear = clearOf(L.polys, n, si.poly);
       if (!clear(x1, y - 1.5, x2, y + 1.5)) return null;
-      if (clear(lx1, y - SIDE_LABEL_H - 1.5, lx2, y - 1.5)) return 'above';
+      // своя вертикаль от выхода вниз к полке тоже не должна проходить через подпись
+      const [[vx, vy0], [, vy1]] = si.poly;
+      const ownClear = (rx1: number, ry1: number, rx2: number, ry2: number) => !over(vx, vy0, vx, vy1, rx1, ry1, rx2, ry2);
+      if (clear(lx1, y - SIDE_LABEL_H - 1.5, lx2, y - 1.5) && ownClear(lx1, y - SIDE_LABEL_H - 1.5, lx2, y - 1.5)) return 'above';
       if (clear(lx1, y + 1.5, lx2, y + SIDE_LABEL_H + 1.5)) return 'below';
       return null;
     };

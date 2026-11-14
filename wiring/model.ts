@@ -52,15 +52,16 @@ export interface WiringModel {
 // ---------------------------------------------------------------------------
 // Подписи линий. Меняйте тексты здесь: схема и таблица берут их отсюда.
 export const CABLE = {
-  rs485: 'RS485, 4 жилы 0,5 мм²',
-  temp: '3 жилы 0,5 мм²',
-  contact: '4 жилы 0,5 мм²',
-  power230: '~230 В, 3×0,75 мм²',
-  boilerRelay: 'сухой контакт, 2×0,5 мм²',
-  boilerBus: '2×0,75 мм²',
+  rs485: 'RS485, 4 жилы 0,5 мм',
+  temp: '3 жилы 0,5 мм',
+  contact: '4 жилы 0,5 мм',
+  power230: '~230 В, 3×0,75 мм',
+  zone230: '~230 В, 2×0,75 мм',
+  boilerRelay: 'сухой контакт, 2×0,75 мм',
+  boilerBus: '2×0,75 мм',
   neptun: '12 В, приводы Neptun',
-  siren: '12 В, 2 жилы 0,5 мм²',
-  mixer: '~230 В, 3×0,75 мм²',
+  siren: '12 В, 2 жилы 0,5 мм',
+  mixer: '~230 В, 3×0,75 мм',
   radio: '868 МГц',
   lora: 'LoRa',
 };
@@ -185,8 +186,8 @@ const buildStart = (state: AppState, items: CartItem[]): WiringModel => {
   if (state.boilerPump) pushLoad('Насос бойлера ГВС');
   for (let i = 1; i <= (isStart ? 0 : state.heatingPumps); i++) pushLoad(`Насос отопления ${i}`);
   if (state.recirculationPump && !isStart) pushLoad('Насос рециркуляции');
-  for (let i = 1; i <= (isStart ? 0 : state.zones); i++) pushLoad(`Зона ${i}`, qty('ec01099') ? 'сервоприводы ec01099' : 'сервоприводы коллектора');
-  for (let i = 1; i <= (isStart ? 0 : Math.min(state.zonesWithTwoSources, state.zones)); i++) pushLoad(`Зона ${i}, 2-й контур`, 'тёплый пол / радиаторы');
+  for (let i = 1; i <= (isStart ? 0 : state.zones); i++) pushLoad(`Зона ${i}`, qty('ec01099') ? 'сервоприводы ec01099' : 'сервоприводы коллектора', 'power230', CABLE.zone230);
+  for (let i = 1; i <= (isStart ? 0 : Math.min(state.zonesWithTwoSources, state.zones)); i++) pushLoad(`Зона ${i}, 2-й контур`, 'тёплый пол / радиаторы', 'power230', CABLE.zone230);
   const neptun = state.neptun12 + state.neptun34 + state.neptun1;
   if (neptun > 0) pushLoad(`Краны Neptun × ${neptun}`, [state.neptun12 && `1/2"×${state.neptun12}`, state.neptun34 && `3/4"×${state.neptun34}`, state.neptun1 && `1"×${state.neptun1}`].filter(Boolean).join(', '), 'low12', CABLE.neptun);
   manualByType('RELAY').forEach(id => loads.push({ n: dev(id, 'добавлено вручную', { kind: 'load' }), kind: 'power230', cable: CABLE.power230 }));
@@ -562,8 +563,8 @@ const buildV40 = (state: AppState, items: CartItem[]): PlannedWiring => {
   const zoneGroups: Load[][] = [];
   for (let i = 1; i <= state.zones; i++) {
     zoneGroups.push(i <= z2
-      ? [mk(`Зона ${i}, 1-й контур`, zoneSub), mk(`Зона ${i}, 2-й контур`, zoneSub)]
-      : [mk(`Зона ${i}`, zoneSub)]);
+      ? [mk(`Зона ${i}, 1-й контур`, zoneSub, 'power230', CABLE.zone230), mk(`Зона ${i}, 2-й контур`, zoneSub, 'power230', CABLE.zone230)]
+      : [mk(`Зона ${i}`, zoneSub, 'power230', CABLE.zone230)]);
   }
   const putZone = (u: WNode, g: Load[]) => { loads.get(u)!.push(...g); used.set(u, used.get(u)! + g.length); };
   const restZones: Load[][] = [];
