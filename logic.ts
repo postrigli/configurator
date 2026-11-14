@@ -1,5 +1,6 @@
 import { AppState, CartItem, ConnectionType, Product } from './types';
 import { PRODUCTS, OPTIONAL_ITEMS } from './constants';
+import { buildWiring, PLANNED_IDS } from './wiring/model';
 
 const findProduct = (id: string): Product => {
   const p = PRODUCTS.find((p) => p.id === id);
@@ -218,6 +219,23 @@ export const calculateCart = (state: AppState): CartItem[] => {
   let finalBaseQty = logicSum >= 39 ? 3 : (logicSum >= 20 ? 2 : 1);
   if (usage.RADIO > finalBaseQty * 32) finalBaseQty = Math.ceil(usage.RADIO / 32);
   if (usage.PORT123 > finalBaseQty * 2) finalBaseQty = Math.max(finalBaseQty, Math.ceil(usage.PORT123 / 2));
+  // LoRa: до 32 устройств на блок v4.0 (свой адаптер ec01096 на каждом), максимум 3 блока = 96 устройств.
+  if (!isStart && usage.LORA > finalBaseQty * 32) finalBaseQty = Math.max(finalBaseQty, Math.min(3, Math.ceil(usage.LORA / 32)));
+
+  // v4.0: расширители, разветвители, питание и замены датчиков считает общий расчёт схемы
+  // (wiring/model.ts → buildV40): так корзина и схема подключения всегда совпадают.
+  if (!isStart) {
+    const baseV40 = cart.get(baseUnitId);
+    if (baseV40) baseV40.quantity = finalBaseQty;
+    const plan = buildWiring(state, Array.from(cart.values()));
+    PLANNED_IDS.forEach(id => {
+      const n = plan.counts[id] || 0;
+      const cur = cart.get(id);
+      if (cur) { if (n > 0) cur.quantity = n; else cart.delete(id); }
+      else if (n > 0) addItem(id, n);
+    });
+    return Array.from(cart.values());
+  }
 
   // Force ec01001 to ec01002 if finalBaseQty >= 2
   if (finalBaseQty >= 2 && !isStart) {
@@ -283,7 +301,13 @@ export const calculateCart = (state: AppState): CartItem[] => {
       addItem('ec01004', swap); usage.TC -= swap; usage.DOP += swap;
     }
   }
-  while (usage.DOP > available.DOP) { addItem('ec01033', 1); available.DOP += 8; usage.DOP += 1; }
+  // Разветвитель RS485: 1 вход + 9 выходов (занимает один выход, даёт девять).
+  let splitters = 0;
+  while (usage.DOP > available.DOP) { addItem('ec01033', 1); available.DOP += 9; usage.DOP += 1; splitters++; }
+  // Питание ec01039: каждый второй разветвитель в цепочке; ec01055 с 5+ датчиками; один адаптер на линии засчитывается за оба правила.
+  const contactsOn055 = cart.get('ec01055') ? usage.CONTACT - 1 : 0;
+  const psu = Math.max(Math.floor(splitters / 2), contactsOn055 >= 5 ? 1 : 0);
+  if (psu > 0) addItem('ec01039', psu);
 
   const baseItem = cart.get(baseUnitId);
   if (baseItem) baseItem.quantity = isStart ? 1 : finalBaseQty;

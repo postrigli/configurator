@@ -1,7 +1,11 @@
 import React, { useState, useMemo } from 'react';
 import { pdf } from '@react-pdf/renderer';
 import { PrintLayout } from './PrintLayout';
-import { CartItem, Product } from '../types';
+import { WiringLayout } from './WiringLayout';
+import { buildWiring } from '../wiring/model';
+import { layoutWiring } from '../wiring/layout';
+import { makePdfFile, savePdf, shareFile, downloadFile, pdfName } from './savePdf';
+import { AppState, CartItem, Product } from '../types';
 import { PRODUCTS, OPTIONAL_ITEMS } from '../constants';
 
 interface CartProps {
@@ -11,9 +15,10 @@ interface CartProps {
   onHideItem?: (productId: string) => void;
   customOrderNumber?: string;
   onUpdateOrderNumber?: (val: string) => void;
+  appState?: AppState;
 }
 
-export const Cart: React.FC<CartProps> = ({ items, onManualAdd, onRemoveManual, onHideItem, customOrderNumber, onUpdateOrderNumber }) => {
+export const Cart: React.FC<CartProps> = ({ items, onManualAdd, onRemoveManual, onHideItem, customOrderNumber, onUpdateOrderNumber, appState }) => {
   // Sort products alphabetically for the dropdown
   const sortedProducts = useMemo(() => {
     return [...PRODUCTS].sort((a, b) => a.name.localeCompare(b.name));
@@ -23,7 +28,14 @@ export const Cart: React.FC<CartProps> = ({ items, onManualAdd, onRemoveManual, 
   const [selectedManualId, setSelectedManualId] = useState(sortedProducts[0].id);
   const [manualQty, setManualQty] = useState(1);
   const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
+  const [isGeneratingWiring, setIsGeneratingWiring] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+  // файл готов, но браузер телефона просит ещё одно нажатие, чтобы открыть «Поделиться»
+  const [readyFile, setReadyFile] = useState<File | null>(null);
+
+  const deliver = async (file: File) => {
+    if (await savePdf(file) === 'needs-tap') setReadyFile(file);
+  };
 
   const filteredProducts = useMemo(() => {
     const term = searchTerm.toLowerCase();
@@ -41,20 +53,29 @@ export const Cart: React.FC<CartProps> = ({ items, onManualAdd, onRemoveManual, 
       setIsGeneratingPDF(true);
       
       const blob = await pdf(<PrintLayout items={items} customOrderNumber={customOrderNumber} />).toBlob();
-      const url = URL.createObjectURL(blob);
-      
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `ectoControl_configurator_${customOrderNumber || 'new'}.pdf`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
+      await deliver(makePdfFile(blob, pdfName('ectoControl_configurator', customOrderNumber)));
     } catch (error) {
       console.error('Error generating PDF:', error);
       alert('Произошла ошибка при создании PDF файла.');
     } finally {
       setIsGeneratingPDF(false);
+    }
+  };
+
+  const handleDownloadWiring = async () => {
+    if (!appState) return;
+    try {
+      setIsGeneratingWiring(true);
+      const model = buildWiring(appState, items);
+      const layout = layoutWiring(model);
+      const orderNumber = customOrderNumber && customOrderNumber.trim() !== '' ? customOrderNumber : 'б/н';
+      const blob = await pdf(<WiringLayout model={model} layout={layout} orderNumber={orderNumber} />).toBlob();
+      await deliver(makePdfFile(blob, pdfName('ectoControl_skhema_podklyucheniya', customOrderNumber)));
+    } catch (error) {
+      console.error('Error generating wiring PDF:', error);
+      alert('Произошла ошибка при создании схемы подключения.');
+    } finally {
+      setIsGeneratingWiring(false);
     }
   };
 
@@ -165,13 +186,26 @@ export const Cart: React.FC<CartProps> = ({ items, onManualAdd, onRemoveManual, 
               )}
               {isGeneratingPDF ? 'PDF...' : 'Скачать PDF'}
             </button>
-            <button 
+            <button
+              onClick={handleDownloadWiring}
+              disabled={isGeneratingWiring || !appState}
+              className="flex items-center justify-center px-4 py-3 border border-gray-200 rounded-xl font-semibold text-ecto-dark hover:bg-gray-50 hover:border-gray-300 transition-all disabled:opacity-50"
+              title="Скачать PDF со схемой подключения всех устройств из корзины"
+            >
+              {isGeneratingWiring ? (
+                <svg className="animate-spin -ml-1 mr-2 h-5 w-5 text-ecto-dark" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+              ) : (
+                <svg className="w-5 h-5 mr-2 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 5h4v4H4zM16 5h4v4h-4zM10 15h4v4h-4zM6 9v3h12V9M12 12v3"></path></svg>
+              )}
+              {isGeneratingWiring ? 'Схема...' : 'Схема подключения'}
+            </button>
+          </div>
+          <button 
               onClick={() => setIsModalOpen(true)}
               className="flex items-center justify-center px-4 py-3 bg-white border border-ecto-gold text-ecto-gold rounded-xl font-bold hover:bg-ecto-gold/5 transition-all"
             >
               + Добавить
             </button>
-          </div>
           <button 
             onClick={handleOrder}
             className="flex items-center justify-center px-4 py-3 bg-ecto-gold text-white rounded-xl font-bold hover:bg-[#e6aa00] shadow-lg shadow-yellow-100 transition-all"
@@ -242,6 +276,29 @@ export const Cart: React.FC<CartProps> = ({ items, onManualAdd, onRemoveManual, 
                 className="px-5 py-2 bg-ecto-gold text-white font-bold rounded-lg hover:bg-[#e6aa00] transition-colors"
               >
                 Добавить
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {readyFile && (
+        <div className="fixed inset-0 bg-black/40 flex items-end sm:items-center justify-center z-[60] p-4" onClick={() => setReadyFile(null)}>
+          <div className="bg-white rounded-2xl p-5 w-full max-w-sm shadow-2xl" onClick={e => e.stopPropagation()}>
+            <div className="font-bold text-ecto-dark mb-1">Файл готов</div>
+            <div className="text-sm text-gray-500 mb-4 break-all">{readyFile.name}</div>
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                className="px-4 py-3 bg-ecto-gold text-white font-bold rounded-xl"
+                onClick={() => { const f = readyFile; setReadyFile(null); shareFile(f).catch(() => {}); }}
+              >
+                Поделиться
+              </button>
+              <button
+                className="px-4 py-3 border border-gray-200 rounded-xl font-semibold text-ecto-dark"
+                onClick={() => { const f = readyFile; setReadyFile(null); downloadFile(f); }}
+              >
+                Открыть
               </button>
             </div>
           </div>
