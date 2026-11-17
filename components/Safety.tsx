@@ -23,6 +23,13 @@ export const Safety: React.FC<SafetyProps> = ({ state, onUpdate }) => {
             <label className="font-bold block text-sm md:text-base text-ecto-lightgray uppercase tracking-wider">Датчики</label>
             
             <div className="flex justify-between items-center py-2 border-b border-gray-50 last:border-0">
+              <span className="text-sm md:text-base font-medium pr-2">Датчик утечки газа</span>
+              <div className="flex-shrink-0">
+                <Counter value={state.gasSensors} onChange={(v) => onUpdate({ gasSensors: v })} max={9} />
+              </div>
+            </div>
+
+            <div className="flex justify-between items-center py-2 border-b border-gray-50 last:border-0">
               <span className="text-sm md:text-base font-medium pr-2">Дымовой проводной</span>
               <div className="flex-shrink-0">
                 <Counter value={state.wiredSmokeSensors} onChange={(v) => onUpdate({ wiredSmokeSensors: v })} max={32} />

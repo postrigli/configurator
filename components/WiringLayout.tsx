@@ -50,7 +50,7 @@ const LineSample: React.FC<{ kind: LineKind }> = ({ kind }) => {
   );
 };
 
-const Header: React.FC<{ title: string; order: string; sheet: number; total: number }> = ({ title, order, sheet, total }) => (
+const Header: React.FC<{ title: string; order: string }> = ({ title, order }) => (
   <View style={s.header} fixed>
     <View style={{ flexDirection: 'row', alignItems: 'flex-end' }}>
       <Text style={s.logo}><Text style={{ color: GOLD }}>ecto</Text><Text style={{ color: DARK }}>Control</Text></Text>
@@ -59,7 +59,7 @@ const Header: React.FC<{ title: string; order: string; sheet: number; total: num
     </View>
     <View style={s.hRight}>
       <Text style={s.order}>Комплект № {order}</Text>
-      <Text style={s.small}>{new Date().toLocaleDateString('ru-RU')} · Лист {sheet} из {total}</Text>
+      <Text style={s.small} render={({ pageNumber, totalPages }) => `${new Date().toLocaleDateString('ru-RU')} · Лист ${pageNumber} из ${totalPages}`} />
     </View>
   </View>
 );
@@ -149,10 +149,10 @@ const BoxView: React.FC<{ b: LBox }> = ({ b }) => b.offPage ? <OffPageLabel b={b
   </>
 );
 
-const SheetPage: React.FC<{ sh: LSheet; order: string; total: number }> = ({ sh, order, total }) => (
+const SheetPage: React.FC<{ sh: LSheet; order: string }> = ({ sh, order }) => (
   <Page size="A4" orientation="landscape" style={s.page}>
     <View style={{ position: 'absolute', left: 0, top: 0, width: PAGE_W, height: PAGE_H - 2 }} wrap={false}>
-    <Header title={sh.title} order={order} sheet={sh.number} total={total} />
+    <Header title={sh.title} order={order} />
     {sh.image ? <Image src={sh.image.src} style={{ position: 'absolute', left: sh.image.x, top: sh.image.y, width: sh.image.w, height: sh.image.h }} /> : null}
 
     <Svg style={{ position: 'absolute', left: 0, top: 0 }} width={PAGE_W} height={PAGE_H - 4}>
@@ -240,15 +240,26 @@ const COLS = [
 ] as const;
 
 export const WiringLayout = ({ model, layout, orderNumber }: { model: WiringModel; layout: LayoutResult; orderNumber: string }) => {
-  const total = layout.sheets.length + 1;
+  const unconnected = new Map<string, { name: string; qty: number; reasons: Map<string, number> }>();
+  for (const item of model.unconnected) {
+    const row = unconnected.get(item.productId) || { name: item.name, qty: 0, reasons: new Map<string, number>() };
+    row.qty += item.qty;
+    row.reasons.set(item.reason, (row.reasons.get(item.reason) || 0) + item.qty);
+    unconnected.set(item.productId, row);
+  }
+  const mountingTips = model.units[0]?.model === 'ec01105'
+    ? MOUNTING_TIPS.map(tip => tip.startsWith('Питание шины ДОП:')
+      ? 'Для Start адаптер ec01039 (14 В) добавляется к ec01055, если в комплекте есть датчик газа и всего не меньше четырёх контактных датчиков.'
+      : tip)
+    : MOUNTING_TIPS;
   return (
     <Document title={`Схема подключения ectoControl № ${orderNumber}`}>
-      {layout.sheets.map(sh => <SheetPage key={sh.number} sh={sh} order={orderNumber} total={total} />)}
+      {layout.sheets.map(sh => <SheetPage key={sh.number} sh={sh} order={orderNumber} />)}
 
       <Page size="A4" orientation="landscape" style={s.tPage}>
-        <Header title="Таблица подключений" order={orderNumber} sheet={total} total={total} />
+        <Header title="Таблица подключений" order={orderNumber} />
         <Text style={s.h2}>Таблица подключений</Text>
-        <View style={[s.tr, s.th]} fixed>
+        <View style={[s.tr, s.th]} minPresenceAhead={13}>
           {COLS.map(c => <Text key={c.k} style={[s.td, { width: c.w }]}>{c.title}</Text>)}
         </View>
         {layout.rows.map((r, i) => (
@@ -265,14 +276,27 @@ export const WiringLayout = ({ model, layout, orderNumber }: { model: WiringMode
           </View>
         ))}
 
-        {model.unconnected.length ? (
-          <View wrap={false}>
-            <Text style={s.h2}>Не подключено, добавлено вручную</Text>
-            {model.unconnected.map((u, i) => (
-              <View key={i} style={s.tip}><Text>• {u.productId} {u.name} × {u.qty}: {u.reason}</Text></View>
+        {unconnected.size > 0 && (
+          <View>
+            <Text style={s.h2} minPresenceAhead={30}>Оборудование без назначенной линии</Text>
+            <View style={[s.tr, s.th]} minPresenceAhead={13}>
+              <Text style={[s.td, { width: '11%' }]}>Артикул</Text>
+              <Text style={[s.td, { width: '37%' }]}>Оборудование</Text>
+              <Text style={[s.td, { width: '7%' }]}>Кол-во</Text>
+              <Text style={[s.td, { width: '45%' }]}>Причина</Text>
+            </View>
+            {Array.from(unconnected, ([id, row]) => (
+              <View key={id} style={s.tr} wrap={false}>
+                <Text style={[s.td, { width: '11%' }]}>{id}</Text>
+                <Text style={[s.td, { width: '37%' }]}>{row.name}</Text>
+                <Text style={[s.td, { width: '7%' }]}>× {row.qty}</Text>
+                <Text style={[s.td, { width: '45%' }]}>
+                  {Array.from(row.reasons, ([reason, qty]) => row.reasons.size > 1 ? `${qty} шт. — ${reason}` : reason).join('; ')}
+                </Text>
+              </View>
             ))}
           </View>
-        ) : null}
+        )}
 
         <View wrap={false}>
           <Text style={s.h2}>Обозначения</Text>
@@ -285,7 +309,7 @@ export const WiringLayout = ({ model, layout, orderNumber }: { model: WiringMode
 
         <View wrap={false}>
           <Text style={s.h2}>Рекомендации по монтажу</Text>
-          {[...MOUNTING_TIPS, ...model.notes].map((t, i) => <View key={i} style={s.tip}><Text>• {t}</Text></View>)}
+          {[...mountingTips, ...model.notes].map((t, i) => <View key={i} style={s.tip}><Text>• {t}</Text></View>)}
           <Text style={[s.small, { marginTop: 6 }]}>
             Схема составлена автоматическим конфигуратором на сайте ectoControl.ru по выбранному комплекту и носит рекомендательный характер. Перед монтажом сверьтесь с паспортами устройств и проконсультируйтесь с инженерами ectoControl.
           </Text>

@@ -59,7 +59,7 @@ export const CABLE = {
   zone230: '~230 В, 2×0,75 мм',
   boilerRelay: 'сухой контакт, 2×0,75 мм',
   boilerBus: '2×0,75 мм',
-  neptun: '12 В, приводы Neptun',
+  neptun: '3x0.75мм; 12В',
   siren: '12 В, 2 жилы 0,5 мм',
   mixer: '~230 В, 3×0,75 мм',
   radio: '868 МГц',
@@ -97,6 +97,8 @@ const BOILER_ADAPTER: Partial<Record<ConnectionType, string>> = {
   [ConnectionType.LEMAX]: 'ec01092', [ConnectionType.V0_10]: 'ec01098', [ConnectionType.KITURAMI]: 'ec01108',
   [ConnectionType.EMS_PLUS]: 'ec01125',
 };
+export const isBoilerAdapter = (id: string) => Object.values(BOILER_ADAPTER).includes(id) || id === 'ec01042' || id === 'ec01097';
+
 const BUS_NAME: Partial<Record<ConnectionType, string>> = {
   [ConnectionType.OPENTHERM]: 'OpenTherm', [ConnectionType.EBUS]: 'eBus', [ConnectionType.NAVIEN]: 'Navien',
   [ConnectionType.ARDERIA]: 'Arderia', [ConnectionType.BSB]: 'BSB', [ConnectionType.RINNAI]: 'Rinnai',
@@ -115,6 +117,30 @@ const node = (kind: NodeKind, title: string, extra: Partial<WNode> = {}): WNode 
 
 const dev = (productId: string, subtitle?: string, extra: Partial<WNode> = {}): WNode =>
   node('device', shortName(productId), { productId, subtitle, ...extra });
+
+const neptunModels = [
+  { field: 'neptun12', id: 'ec01065', size: '1/2"' },
+  { field: 'neptun34', id: 'ec01066', size: '3/4"' },
+  { field: 'neptun1', id: 'ec01067', size: '1"' },
+] as const;
+
+const neptunSizes = (state: AppState) => neptunModels.flatMap(({ field, id, size }) => {
+  const qty = state[field] + state.manualItems.filter(item => item.productId === id).reduce((sum, item) => sum + item.quantity, 0);
+  return qty ? [{ size, qty }] : [];
+});
+
+export const countNeptun = (state: AppState) => neptunSizes(state).reduce((sum, item) => sum + item.qty, 0);
+
+const neptunLoad = (state: AppState) => {
+  const sizes = neptunSizes(state);
+  if (!sizes.length) return undefined;
+  const total = sizes.reduce((sum, item) => sum + item.qty, 0);
+  return {
+    n: node('load', `Краны Neptun × ${total}`, { subtitle: sizes.map(({ size, qty }) => `${size}×${qty}`).join(', ') }),
+    kind: 'low12' as const,
+    cable: CABLE.neptun,
+  };
+};
 
 const link = (parent: WNode, to: WNode, kind: LineKind, portName: string, portKeys: string[], tabs: string[], cable: string) => {
   parent.children.push({ to, kind, portName, portKeys, tabs, cable, label: cable ? `${portName} · ${cable}` : portName });
@@ -188,9 +214,9 @@ const buildStart = (state: AppState, items: CartItem[]): WiringModel => {
   if (state.recirculationPump && !isStart) pushLoad('Насос рециркуляции');
   for (let i = 1; i <= (isStart ? 0 : state.zones); i++) pushLoad(`Зона ${i}`, qty('ec01099') ? 'сервоприводы ec01099' : 'сервоприводы коллектора', 'power230', CABLE.zone230);
   for (let i = 1; i <= (isStart ? 0 : Math.min(state.zonesWithTwoSources, state.zones)); i++) pushLoad(`Зона ${i}, 2-й контур`, 'тёплый пол / радиаторы', 'power230', CABLE.zone230);
-  const neptun = state.neptun12 + state.neptun34 + state.neptun1;
-  if (neptun > 0) pushLoad(`Краны Neptun × ${neptun}`, [state.neptun12 && `1/2"×${state.neptun12}`, state.neptun34 && `3/4"×${state.neptun34}`, state.neptun1 && `1"×${state.neptun1}`].filter(Boolean).join(', '), 'low12', CABLE.neptun);
-  manualByType('RELAY').forEach(id => loads.push({ n: dev(id, 'добавлено вручную', { kind: 'load' }), kind: 'power230', cable: CABLE.power230 }));
+  const neptun = neptunLoad(state);
+  if (neptun) loads.push(neptun);
+  manualByType('RELAY').filter(id => !neptunModels.some(model => model.id === id)).forEach(id => loads.push({ n: dev(id, 'добавлено вручную', { kind: 'load' }), kind: 'power230', cable: CABLE.power230 }));
 
   // Котлы с сухим контактом: реле блоков по порядку (A–C первым).
   const freeBase = [...baseRelays];
@@ -272,7 +298,7 @@ const buildStart = (state: AppState, items: CartItem[]): WiringModel => {
   const addC = (id: string, count: number, label?: (i: number) => string, ports = 1) => {
     for (let i = 1; i <= count; i++) contactDevs.push({ n: dev(id, label ? label(i) : count > 1 ? `№${i}` : undefined), ports });
   };
-  if (!isStart) addC('ec01008', state.gasSensors);
+  addC('ec01008', state.gasSensors);
   addC('ec01010', state.pressureSensors, i => state.pressureSensors > 1 ? `№${i}, мин./макс.` : 'мин./макс.', 2);
   addC('ec01015', state.wiredSmokeSensors);
   addC('ec01006', state.wiredLeakSensors);
@@ -389,7 +415,7 @@ const buildStart = (state: AppState, items: CartItem[]): WiringModel => {
   }
   rsTemp.forEach(d => { d.inTab = 'ДОП'; rs.push(d); });
   manualByType('DOP')
-    .filter(id => !['ec01025', 'ec01055', 'ec01060', 'ec01096', 'ec01091', 'ec01004', 'ec01002', 'ec01033', 'ec01107', ...Object.values(BOILER_ADAPTER)].includes(id))
+    .filter(id => !['ec01025', 'ec01055', 'ec01060', 'ec01096', 'ec01091', 'ec01004', 'ec01002', 'ec01033', 'ec01107'].includes(id))
     .forEach(id => rs.push(dev(id, 'добавлено вручную', { inTab: 'ДОП' })));
 
   const splitterIds = [...Array(qty('ec01033')).fill('ec01033'), ...Array(qty('ec01107')).fill('ec01107')] as string[];
@@ -420,7 +446,10 @@ const buildStart = (state: AppState, items: CartItem[]): WiringModel => {
     // разветвители, до которых не дошли устройства
     for (let k = si + 1; k < splitters.length; k++) if (!splitters[k].children.length) splitters[k].reserve = true;
   }
-  attachPsuFromCart(splitters, contactExp, qty('ec01039'));
+  const contactSplitter = contactExp[0];
+  if (contactSplitter && qty('ec01039') && needsStartContactPower(items)) {
+    linkContactPower(contactSplitter);
+  }
 
   // Порядок детей у блока = порядок клемм слева направо (это исключает пересечения линий).
   const order = isStart ? START_PORT_ORDER : V40_PORT_ORDER;
@@ -451,12 +480,21 @@ export const PLANNED_IDS = ['ec01025', 'ec01060', 'ec01055', 'ec01096', 'ec01033
 export const UNIT_CIRCUITS = 19; // контуров управления на один блок (20 и больше → второй блок)
 const MAX_SPLITTERS_PER_LINE = 6;
 const MAX_EC01055 = 5;
-const LORA_PER_UNIT = 32;
+export const LORA_PER_UNIT = 32;
 const RADIO_PER_UNIT = 32;
 
 export interface PlannedWiring extends WiringModel { counts: Record<string, number> }
 
-/** Адаптеры питания ec01039 на одной линии ДОП: max(каждый второй разветвитель, ec01055 с 5+ датчиками). */
+const linkContactPower = (splitter: WNode) => {
+  splitter.outs = [...(splitter.outs || []), 'ПИТ'];
+  link(splitter, dev('ec01039', '14 В, 2 А'), 'low12', 'Питание', ['PSU'], ['ПИТ'], '14 В');
+};
+
+export const needsStartContactPower = (items: CartItem[]) =>
+  items.some(item => item.id === 'ec01008' && item.quantity > 0) &&
+  items.filter(item => item.consumesPort?.type === 'CONTACT').reduce((sum, item) => sum + item.quantity, 0) >= 4;
+
+/** Адаптеры питания ec01039 на одной линии ДОП v4.0: разветвители и ec01055 с 5+ датчиками. */
 export const attachPsu = (splitters: WNode[], contactExps: WNode[], count: (id: string, n?: number) => void) => {
   const big = contactExps.filter(e => e.children.length >= 5);
   const need = Math.max(Math.floor(splitters.length / 2), big.length);
@@ -464,9 +502,8 @@ export const attachPsu = (splitters: WNode[], contactExps: WNode[], count: (id: 
   // остальные — в каждый второй разветвитель, начиная с самого дальнего
   const even = splitters.filter((_, i) => i % 2 === 1).reverse();
   while (targets.length < need && even.length) targets.push(even.shift()!);
-  targets.forEach(t => {
-    t.outs = [...(t.outs || []), 'ПИТ'];
-    link(t, dev('ec01039', '14 В, 2 А'), 'low12', 'Питание', ['PSU'], ['ПИТ'], '14 В');
+  targets.forEach(target => {
+    linkContactPower(target);
     count('ec01039');
   });
 };
@@ -548,9 +585,9 @@ const buildV40 = (state: AppState, items: CartItem[]): PlannedWiring => {
   const boilerLoads: Load[] = [];
   if (state.boilerPump) boilerLoads.push(mk('Насос бойлера ГВС'));
   if (state.recirculationPump) boilerLoads.push(mk('Насос рециркуляции'));
-  const neptun = state.neptun12 + state.neptun34 + state.neptun1;
-  if (neptun > 0) boilerLoads.push(mk(`Краны Neptun × ${neptun}`, [state.neptun12 && `1/2"×${state.neptun12}`, state.neptun34 && `3/4"×${state.neptun34}`, state.neptun1 && `1"×${state.neptun1}`].filter(Boolean).join(', '), 'low12', CABLE.neptun));
-  manualByType('RELAY').forEach(id => boilerLoads.push({ n: dev(id, 'добавлено вручную', { kind: 'load' }), kind: 'power230', cable: CABLE.power230 }));
+  const neptun = neptunLoad(state);
+  if (neptun) boilerLoads.push(neptun);
+  manualByType('RELAY').filter(id => !neptunModels.some(model => model.id === id)).forEach(id => boilerLoads.push({ n: dev(id, 'добавлено вручную', { kind: 'load' }), kind: 'power230', cable: CABLE.power230 }));
   const pumps: Load[] = [];
   for (let i = 1; i <= state.heatingPumps; i++) pumps.push(mk(`Насос отопления ${i}`));
   loads.get(pumpsUnit)!.push(...pumps);
@@ -747,16 +784,14 @@ const buildV40 = (state: AppState, items: CartItem[]): PlannedWiring => {
   placeLora('ec01041', state.wirelessSensors, zoneFirst);
   placeLora('ec01080', state.wirelessThermostats, zoneFirst);
   placeLora('ec01056', state.wirelessLeakSensorsLora, U);
-  manualByType('LORA').filter(id => id !== 'ec01079').forEach(id => placeLora(id, 1, U));
+  manualByType('LORA').forEach(id => placeLora(id, 1, U));
   let manual096 = manualQty('ec01096');
-  let n096 = 0;
   const adapters: WNode[] = [];
   U.forEach(u => {
     const g = loraGroups.get(u)!;
     if (!g.size) return;
     const a = dev('ec01096', undefined, { kind: 'expander', inTab: 'ДОП' });
-    if (u === U0 && manual096 > 0) manual096--;
-    n096++;
+    if (manual096 > 0) manual096--;
     g.forEach((n, id) => each(id, n).forEach(d => link(a, d, 'lora', 'LoRa', ['LORA'], ['LoRa'], '')));
     bus(u).lora.push(a); adapters.push(a);
   });
@@ -766,7 +801,7 @@ const buildV40 = (state: AppState, items: CartItem[]): PlannedWiring => {
 
   // ---------------------------------------------------------------- ручные устройства RS485
   manualByType('DOP')
-    .filter(id => !['ec01091', 'ec01107', ...Object.values(BOILER_ADAPTER)].includes(id))
+    .filter(id => !['ec01091', 'ec01107'].includes(id))
     .forEach(id => bus(U0).manual.push(dev(id, 'добавлено вручную', { inTab: 'ДОП' })));
 
   // ---------------------------------------------------------------- шина ДОП каждого блока: разветвители и питание
@@ -812,6 +847,7 @@ const buildV40 = (state: AppState, items: CartItem[]): PlannedWiring => {
 
 export const buildWiring = (state: AppState, items: CartItem[]): PlannedWiring => {
   const m = (state.baseUnitId || 'ec01v40') === 'ec01105' ? { ...buildStart(state, items), counts: {} } : buildV40(state, items);
+  addUnassignedItems(m, items);
   numberWireless(m);
   return m;
 };
@@ -830,10 +866,30 @@ const numberWireless = (m: WiringModel) => {
   byId.forEach(list => { if (list.length > 1) list.forEach((d, i) => { d.subtitle = `№${i + 1}`; }); });
 };
 
-// Start: адаптеров питания столько, сколько положила корзина; ставим их по тому же правилу.
-const attachPsuFromCart = (splitters: WNode[], contactExps: WNode[], n: number) => {
-  if (n <= 0) return;
-  let left = n;
-  attachPsu(splitters, contactExps, () => { left--; });
-  if (left < 0) { /* корзина положила меньше — схема всё равно показывает, где нужно питание */ }
+// Позиции, которым схема не назначает линию автоматически.
+const addUnassignedItems = (model: WiringModel, items: CartItem[]) => {
+  const reasons: Record<string, string> = {
+    ec01114: 'нужно назначить совместимый проводной термостат',
+    ec01018: 'нужно уточнить разъём микрофона',
+    ec01027: 'нужно уточнить разъём антенны',
+    ec01028: 'нужно уточнить подключение аккумулятора',
+    ec01063: 'нужно назначить устройство, которое будет получать питание',
+    ec01016: 'на схеме Start нет выхода 1-2-3',
+    'ec01016-1': 'на схеме Start нет выхода 1-2-3',
+  };
+  const connected = new Map<string, number>();
+  const visit = (device: WNode) => {
+    if (device.productId) connected.set(device.productId, (connected.get(device.productId) || 0) + (device.qty || 1));
+    device.children.forEach(edge => visit(edge.to));
+  };
+  model.units.forEach(unit => visit(unit.root));
+
+  for (const item of items) {
+    const reason = reasons[item.id];
+    if (!reason) continue;
+    if ((item.id === 'ec01016' || item.id === 'ec01016-1') && model.units[0]?.model !== 'ec01105') continue;
+    const reported = model.unconnected.reduce((sum, row) => sum + (row.productId === item.id ? row.qty : 0), 0);
+    const missing = item.quantity - (connected.get(item.id) || 0) - reported;
+    if (missing > 0) model.unconnected.push({ productId: item.id, name: item.name, qty: missing, reason });
+  }
 };

@@ -1,6 +1,6 @@
 import { AppState, CartItem, ConnectionType, Product } from './types';
 import { PRODUCTS, OPTIONAL_ITEMS } from './constants';
-import { buildWiring, PLANNED_IDS } from './wiring/model';
+import { buildWiring, countNeptun, isBoilerAdapter, LORA_PER_UNIT, needsStartContactPower, PLANNED_IDS } from './wiring/model';
 
 const findProduct = (id: string): Product => {
   const p = PRODUCTS.find((p) => p.id === id);
@@ -155,7 +155,7 @@ export const calculateCart = (state: AppState): CartItem[] => {
   usage.DOP += state.floorSensors; addItem('ec01004', state.floorSensors);
   addItem('ec01114', isStart ? 0 : state.ntcFloorSensors);
 
-  const gasSensors = isStart ? 0 : state.gasSensors;
+  const gasSensors = state.gasSensors;
   usage.CONTACT += gasSensors; addItem('ec01008', gasSensors);
   
   // Rule 2.5: No RADIO ports
@@ -195,8 +195,7 @@ export const calculateCart = (state: AppState): CartItem[] => {
 
   // Neptun actuators: all of them are connected to a single relay.
   // The first actuator consumes 1 RELAY port, the second and third do not consume any.
-  const neptunCount = state.neptun12 + state.neptun34 + state.neptun1;
-  if (neptunCount > 0) {
+  if (countNeptun(state) > 0) {
     usage.RELAY += 1;
   }
   addItem('ec01065', state.neptun12);
@@ -211,7 +210,11 @@ export const calculateCart = (state: AppState): CartItem[] => {
       if (item.productId === 'ec01056') return; // Rule 2.2: No ec01056 leak sensors
       if (item.productId === 'ec01096') return; // Rule 2.2: No ec01096 LoRa adapter
     }
-    addItem(item.productId, item.quantity, true);
+    const port = findProduct(item.productId).consumesPort;
+    if (isStart && port?.type === 'CONTACT') usage.CONTACT += port.amount * item.quantity;
+    if (isStart && isBoilerAdapter(item.productId)) usage.DOP += item.quantity;
+    if (!isStart && port?.type === 'LORA') usage.LORA += item.quantity;
+    addItem(item.productId, isStart && item.productId === 'ec01055' ? 1 : item.quantity, true);
   });
 
   // Central unit scaling logic (applies only to ec01v40)
@@ -220,7 +223,7 @@ export const calculateCart = (state: AppState): CartItem[] => {
   if (usage.RADIO > finalBaseQty * 32) finalBaseQty = Math.ceil(usage.RADIO / 32);
   if (usage.PORT123 > finalBaseQty * 2) finalBaseQty = Math.max(finalBaseQty, Math.ceil(usage.PORT123 / 2));
   // LoRa: до 32 устройств на блок v4.0 (свой адаптер ec01096 на каждом), максимум 3 блока = 96 устройств.
-  if (!isStart && usage.LORA > finalBaseQty * 32) finalBaseQty = Math.max(finalBaseQty, Math.min(3, Math.ceil(usage.LORA / 32)));
+  if (!isStart) finalBaseQty = Math.max(finalBaseQty, Math.min(3, Math.ceil(usage.LORA / LORA_PER_UNIT)));
 
   // v4.0: расширители, разветвители, питание и замены датчиков считает общий расчёт схемы
   // (wiring/model.ts → buildV40): так корзина и схема подключения всегда совпадают.
@@ -273,9 +276,8 @@ export const calculateCart = (state: AppState): CartItem[] => {
   // Rule 2.3: Splitter ec01055 can be <= 1 on ec01105
   if (isStart) {
     if (usage.CONTACT > available.CONTACT) {
-      addItem('ec01055', 1);
+      if (!cart.has('ec01055')) addItem('ec01055', 1);
       available.CONTACT += 8;
-      usage.DOP += 1;
     }
   } else {
     while (usage.CONTACT > available.CONTACT) { addItem('ec01055', 1); available.CONTACT += 8; usage.DOP += 1; }
@@ -301,13 +303,14 @@ export const calculateCart = (state: AppState): CartItem[] => {
       addItem('ec01004', swap); usage.TC -= swap; usage.DOP += swap;
     }
   }
+  if (cart.has('ec01055')) usage.DOP += 1;
   // Разветвитель RS485: 1 вход + 9 выходов (занимает один выход, даёт девять).
-  let splitters = 0;
-  while (usage.DOP > available.DOP) { addItem('ec01033', 1); available.DOP += 9; usage.DOP += 1; splitters++; }
-  // Питание ec01039: каждый второй разветвитель в цепочке; ec01055 с 5+ датчиками; один адаптер на линии засчитывается за оба правила.
-  const contactsOn055 = cart.get('ec01055') ? usage.CONTACT - 1 : 0;
-  const psu = Math.max(Math.floor(splitters / 2), contactsOn055 >= 5 ? 1 : 0);
-  if (psu > 0) addItem('ec01039', psu);
+  while (usage.DOP > available.DOP) {
+    addItem('ec01033', 1);
+    available.DOP += 9;
+    usage.DOP += 1;
+  }
+  if (needsStartContactPower(Array.from(cart.values())) && !cart.has('ec01039')) addItem('ec01039', 1);
 
   const baseItem = cart.get(baseUnitId);
   if (baseItem) baseItem.quantity = isStart ? 1 : finalBaseQty;

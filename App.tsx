@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { AppState, CartItem } from './types';
 import { calculateCart } from './logic';
+import { countNeptun } from './wiring/model';
 import { BoilerSection } from './components/BoilerSection';
 import { BoilerRoom } from './components/BoilerRoom';
 import { Zoning } from './components/Zoning';
@@ -68,8 +69,7 @@ const START_UNSUPPORTED_DEFAULTS: Partial<AppState> = {
   zones: 0,
   zonesWithTwoSources: 0,
   manifoldServos: 0,
-  ntcFloorSensors: 0,
-  gasSensors: 0
+  ntcFloorSensors: 0
 };
 
 type V40Buffer = { saved: Partial<AppState>; boilers: AppState['boilers'] };
@@ -95,6 +95,10 @@ const App: React.FC = () => {
     const nextState = { ...state, ...updates };
 
     if (nextState.baseUnitId === 'ec01105') {
+      if (nextState.manualItems.some(item => item.productId === 'ec01055' && item.quantity > 1)) {
+        setShowWarningModal(true);
+        return;
+      }
       try {
         const nextCart = calculateCart(nextState);
 
@@ -125,7 +129,7 @@ const App: React.FC = () => {
         }
 
         // Neptun actuators limit: total of 3 max
-        if (nextState.neptun12 + nextState.neptun34 + nextState.neptun1 > 3) {
+        if (countNeptun(nextState) > 3) {
           setShowWarningModal(true);
           return;
         }
@@ -133,14 +137,16 @@ const App: React.FC = () => {
         // CONTACT port usage limit check for Start (ec01105)
         const contactUsage = 
           nextState.ownThermostats +
+          nextState.gasSensors +
           nextState.pressureSensors * 2 +
           nextState.wiredSmokeSensors +
           nextState.wiredLeakSensors +
           nextState.wiredMotionSensors;
 
-        const manualContactUsage = nextCart
-          .filter(item => item.isManual && item.consumesPort?.type === 'CONTACT')
-          .reduce((sum, item) => sum + (item.consumesPort?.amount || 0) * item.quantity, 0);
+        const manualContactUsage = nextState.manualItems.reduce((sum, item) => {
+          const port = nextCart.find(product => product.id === item.productId)?.consumesPort;
+          return sum + (port?.type === 'CONTACT' ? port.amount * item.quantity : 0);
+        }, 0);
 
         const totalContactUsage = contactUsage + manualContactUsage;
 
@@ -154,6 +160,7 @@ const App: React.FC = () => {
     }
 
     setState(nextState);
+    return true;
   };
 
   const handleBaseUnitChange = (unitId: 'ec01v40' | 'ec01105') => {
@@ -161,16 +168,17 @@ const App: React.FC = () => {
 
     if (unitId === 'ec01105') {
       const keys = Object.keys(START_UNSUPPORTED_DEFAULTS) as (keyof AppState)[];
-      v40BufferRef.current = {
-        saved: Object.fromEntries(keys.map(k => [k, state[k]])) as Partial<AppState>,
-        boilers: state.boilers
-      };
-      setState({
-        ...state,
+      const switched = handleUpdate({
         ...START_UNSUPPORTED_DEFAULTS,
         baseUnitId: 'ec01105',
         boilers: state.boilers.slice(0, 1)
       });
+      if (switched) {
+        v40BufferRef.current = {
+          saved: Object.fromEntries(keys.map(k => [k, state[k]])) as Partial<AppState>,
+          boilers: state.boilers
+        };
+      }
     } else {
       const buffer = v40BufferRef.current;
       v40BufferRef.current = null;
