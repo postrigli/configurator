@@ -57,6 +57,25 @@ jobs:
           npm ci
           npx vite build --base=/configurator/wiring/ --outDir "$GITHUB_WORKSPACE/dist/wiring"
 
+      - name: Check out wiring_codex preview
+        id: codex_preview
+        continue-on-error: true
+        uses: actions/checkout@v4
+        with:
+          ref: wiring_codex
+          path: wiring-codex-src
+          persist-credentials: false
+
+      - name: Build wiring_codex preview
+        if: steps.codex_preview.outcome == 'success'
+        continue-on-error: true
+        working-directory: wiring-codex-src
+        run: |
+          npm ci
+          npx vite build --base=/configurator/wiring-codex/ --outDir dist-preview
+          test -s dist-preview/index.html
+          mv dist-preview "$GITHUB_WORKSPACE/dist/wiring-codex"
+
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist
