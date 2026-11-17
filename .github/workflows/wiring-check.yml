@@ -1,11 +1,11 @@
 # Проверка ветки со схемой подключения. Сама на Pages ничего не публикует:
 # после её успешного завершения workflow «Deploy to GitHub Pages» в main
-# собирает эту ветку в подпапку /configurator/wiring/ (тестовый стенд).
+# собирает эту ветку в подпапку /configurator/wiring-codex/.
 name: Wiring branch check
 
 on:
   push:
-    branches: [claude/project-thread-e1fa5e]
+    branches: [wiring_codex]
   workflow_dispatch:
 
 permissions:
