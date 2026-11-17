@@ -339,7 +339,7 @@ const buildStart = (state: AppState, items: CartItem[]): WiringModel => {
   loraGroups.forEach(g => {
     const n = Math.min(g.count, Math.max(0, loraLeft));
     loraLeft -= n;
-    if (n > 0) loraNodes.push(dev(g.id, n > 1 ? `× ${n}` : undefined, { kind: 'group', qty: n }));
+    if (n > 0) loraNodes.push(...each(g.id, n));
     if (g.count > n) miss(g.id, g.count - n, 'превышен лимит 32 LoRa-устройства на систему');
   });
   const loraAdapters: WNode[] = [];
@@ -365,7 +365,7 @@ const buildStart = (state: AppState, items: CartItem[]): WiringModel => {
       let rest = g.count;
       while (rest > 0 && ui < units.length) {
         const n = Math.min(rest, left);
-        if (n > 0) link(units[ui].root, dev(g.id, n > 1 ? `× ${n}` : undefined, { kind: 'group', qty: n }), 'radio', '868 МГц', ['RADIO'], ['868'], '');
+        if (n > 0) each(g.id, n).forEach(d => link(units[ui].root, d, 'radio', '868 МГц', ['RADIO'], ['868'], ''));
         rest -= n; left -= n;
         if (left === 0) { ui++; left = 32; }
       }
@@ -730,7 +730,7 @@ const buildV40 = (state: AppState, items: CartItem[]): PlannedWiring => {
   [['ec01068', state.coSensors], ['ec01017', state.wirelessSmokeSensors], ['ec01007', state.wirelessLeakSensors], ['ec01014', state.wirelessMotionSensors], ['ec01019', state.wirelessKeyfobs]]
     .forEach(([id, n]) => placeRadio(id as string, n as number, U));
   manualByType('RADIO').forEach(id => placeRadio(id, 1, U));
-  radioGroups.forEach((g, u) => g.forEach((n, id) => link(u, dev(id, n > 1 ? `× ${n}` : undefined, { kind: 'group', qty: n }), 'radio', '868 МГц', ['RADIO'], ['868'], '')));
+  radioGroups.forEach((g, u) => g.forEach((n, id) => each(id, n).forEach(d => link(u, d, 'radio', '868 МГц', ['RADIO'], ['868'], ''))));
 
   // ---------------------------------------------------------------- LoRa (на каждый блок до 32, свой адаптер ec01096)
   const loraLeft = new Map<WNode, number>(U.map(u => [u, LORA_PER_UNIT]));
@@ -757,7 +757,7 @@ const buildV40 = (state: AppState, items: CartItem[]): PlannedWiring => {
     const a = dev('ec01096', undefined, { kind: 'expander', inTab: 'ДОП' });
     if (u === U0 && manual096 > 0) manual096--;
     n096++;
-    g.forEach((n, id) => link(a, dev(id, n > 1 ? `× ${n}` : undefined, { kind: 'group', qty: n }), 'lora', 'LoRa', ['LORA'], ['LoRa'], ''));
+    g.forEach((n, id) => each(id, n).forEach(d => link(a, d, 'lora', 'LoRa', ['LORA'], ['LoRa'], '')));
     bus(u).lora.push(a); adapters.push(a);
   });
   for (let i = 0; i < manual096; i++) { const a = dev('ec01096', undefined, { kind: 'expander', inTab: 'ДОП', reserve: true }); bus(U0).lora.push(a); adapters.push(a); }
@@ -810,8 +810,25 @@ const buildV40 = (state: AppState, items: CartItem[]): PlannedWiring => {
   return { units, unconnected, notes, counts };
 };
 
-export const buildWiring = (state: AppState, items: CartItem[]): PlannedWiring =>
-  (state.baseUnitId || 'ec01v40') === 'ec01105' ? { ...buildStart(state, items), counts: {} } : buildV40(state, items);
+export const buildWiring = (state: AppState, items: CartItem[]): PlannedWiring => {
+  const m = (state.baseUnitId || 'ec01v40') === 'ec01105' ? { ...buildStart(state, items), counts: {} } : buildV40(state, items);
+  numberWireless(m);
+  return m;
+};
+
+// Беспроводные устройства рисуются каждое отдельной карточкой со своей линией до приёмника.
+const WIRELESS = new WeakSet<WNode>();
+const each = (id: string, n: number): WNode[] => Array.from({ length: n }, () => { const d = dev(id); WIRELESS.add(d); return d; });
+// Номера «№k» сквозные по системе для каждого артикула (если таких больше одного).
+const numberWireless = (m: WiringModel) => {
+  const byId = new Map<string, WNode[]>();
+  const walk = (n: WNode) => n.children.forEach(l => {
+    if (WIRELESS.has(l.to) && l.to.productId) { const a = byId.get(l.to.productId) || []; a.push(l.to); byId.set(l.to.productId, a); }
+    walk(l.to);
+  });
+  m.units.forEach(u => walk(u.root));
+  byId.forEach(list => { if (list.length > 1) list.forEach((d, i) => { d.subtitle = `№${i + 1}`; }); });
+};
 
 // Start: адаптеров питания столько, сколько положила корзина; ставим их по тому же правилу.
 const attachPsuFromCart = (splitters: WNode[], contactExps: WNode[], n: number) => {

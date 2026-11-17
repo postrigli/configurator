@@ -18,6 +18,8 @@ const GAP_X = 7;        // минимальный зазор между коро
 const ROW_CAP = Math.floor((CONTENT_W + GAP_X) / (BOX_W + GAP_X)); // коробок в этаже
 const BOX_H = 38;
 const MAX_ROWS = 3;
+const MAX_ROWS_WIRELESS = 4; // беспроводные датчики: подписей на линиях нет, ряды ниже
+const DROP_WIRELESS = 26;
 const CONT_ROOT_Y = 140;  // корни листа-продолжения: линия входит сверху, от линии шапки
 const EDGE_TOP = 62;
 const EDGE_BOTTOM = 546;      // рядов в одном этаже (конечные устройства)
@@ -191,7 +193,9 @@ export const layoutWiring = (model: WiringModel): LayoutResult => {
       // устройства со своими подключениями (термостат с датчиком пола и т.п.) — только в нижнем ряду,
       // чтобы их линии вниз не пересекали другие ряды
       const firstShown = floor.findIndex(shown);
-      for (let R = 2; R <= rowLimit; R++) {
+      const wl = (x: WNode) => pm.has(x) && isWireless(pm.get(x)!.l.kind);
+      const limit = floor.every(wl) ? Math.max(rowLimit, MAX_ROWS_WIRELESS) : rowLimit;
+      for (let R = 2; R <= limit; R++) {
         const per = Math.ceil(floor.length / R);
         let lastStart = per * (R - 1);
         if (lastStart >= floor.length) lastStart = floor.length - 1;
@@ -203,7 +207,10 @@ export const layoutWiring = (model: WiringModel): LayoutResult => {
         for (let i = 0; i < upper.length; i += uPer) rws.push(upper.slice(i, i + uPer));
         rws.push(floor.slice(lastStart));
         const maxPer = Math.max(...rws.map(r => r.length));
-        const nB = rws.slice(1).flat().reduce((a, x) => a + (pm.has(x) ? Math.max(1, pm.get(x)!.l.portKeys.length) : 0), 0);
+        // беспроводные нижних рядов от одного приёмника идут по одной общей вертикали
+        const lower = rws.slice(1).flat();
+        const nB = lower.filter(x => !wl(x)).reduce((a, x) => a + (pm.has(x) ? Math.max(1, pm.get(x)!.l.portKeys.length) : 0), 0)
+          + new Set(lower.filter(wl).map(x => pm.get(x)!.p)).size;
         const cap = Math.floor((CONTENT_W - BYPASS_PAD - LEVEL_STEP * nB + GAP_X) / (BOX_W + GAP_X));
         if (maxPer <= cap) return { rows: rws, nB };
       }
@@ -272,12 +279,18 @@ export const layoutWiring = (model: WiringModel): LayoutResult => {
         const trackStart = maxRight + BYPASS_PAD / 2 + 2;
         const segs: (Seg & { row: number })[] = [];
         let bi = 0;
+        const wTrack = new Map<WNode, number>();
+        const trackFor = (pl: { p: WNode; l: WLink }) => {
+          if (!isWireless(pl.l.kind)) return trackStart + LEVEL_STEP * bi++;
+          if (!wTrack.has(pl.p)) wTrack.set(pl.p, trackStart + LEVEL_STEP * bi++);
+          return wTrack.get(pl.p)!;
+        };
         rowsOf.forEach((row, r) => row.forEach(n => {
           const ps = srcPts(n); const pl = pm.get(n);
           ps.forEach((s0, k) => {
             const m = ps.length; const c = cxOf.get(n)!;
             const tx = m === 1 ? c : c - w / 2 + w * (k + 1) / (m + 1);
-            segs.push({ l: pl!.l, s: s0, t: [tx, 0], level: 0, level2: 0, gBase: prevBottom, subBase: 0, row: r, track: r ? trackStart + LEVEL_STEP * bi++ : undefined, fg: FIRST_GAP, wStart: isWireless(pl!.l.kind) && pl!.p !== job.root });
+            segs.push({ l: pl!.l, s: s0, t: [tx, 0], level: 0, level2: 0, gBase: prevBottom, subBase: 0, row: r, track: r ? trackFor(pl!) : undefined, fg: FIRST_GAP, wStart: isWireless(pl!.l.kind) && pl!.p !== job.root });
           });
         }));
         // линии к боковому краю листа: встают среди линий в порядке выходов
@@ -292,20 +305,31 @@ export const layoutWiring = (model: WiringModel): LayoutResult => {
         });
         // промежуток над этажом: все линии, в т.ч. обходящие (до своей вертикали обхода)
         const proxG = segs.map(g => ({ s: g.s, t: [g.track ?? g.t[0], 0] as [number, number], level: 0 }));
-        const lvG = assignLevels(proxG);
+        let lvG = assignLevels(proxG);
         // радио от коробки-адаптера: под волнами нужен отступ до первой полки
         const fg = segs.some(g => g.wStart) ? WAVE_FIRST_GAP : gap0;
         segs.forEach(g => { g.fg = fg; });
         proxG.forEach((p, i) => { segs[i].level = p.level; });
+        // беспроводные линии от одного приёмника — общая шина на одной полке
+        const shareLevel = (key: (g: Seg & { row: number }) => number, set: (g: Seg & { row: number }, v: number) => void, list: (Seg & { row: number })[]) => {
+          const m = new Map<string, number>();
+          list.forEach(g => { if (!isWireless(g.l.kind)) return; const k = `${g.s[0]}|${g.s[1]}`; m.set(k, Math.min(m.get(k) ?? 1e9, key(g))); });
+          list.forEach(g => { if (isWireless(g.l.kind)) set(g, m.get(`${g.s[0]}|${g.s[1]}`)!); });
+        };
+        shareLevel(g => g.level, (g, v) => { g.level = v; }, segs);
+        if (segs.some(g => isWireless(g.l.kind))) lvG = Math.max(1, ...segs.map(g => g.level + 1));
+        const rowDrop = (r: number) => { const rs = segs.filter(g => g.row === r && !g.side); return rs.length && rs.every(g => isWireless(g.l.kind)) ? DROP_WIRELESS : drop; };
         const rowY: number[] = [];
-        rowY[0] = (!job.unit && fi === 0) ? (tight ? CONT_ROOT_Y_TIGHT : CONT_ROOT_Y) : prevBottom + fg + LEVEL_STEP * (lvG - 1) + drop + TAB_H;
+        rowY[0] = (!job.unit && fi === 0) ? (tight ? CONT_ROOT_Y_TIGHT : CONT_ROOT_Y) : prevBottom + fg + LEVEL_STEP * (lvG - 1) + rowDrop(0) + TAB_H;
         for (let r = 1; r < rowsOf.length; r++) {
           const sub = segs.filter(g => g.row === r);
           const base = rowY[r - 1] + BOX_H;
           const prox = sub.map(g => ({ s: [g.track!, 0] as [number, number], t: g.t, level: 0 }));
-          const lv = assignLevels(prox);
+          let lv = assignLevels(prox);
           prox.forEach((p, i) => { sub[i].level2 = p.level; sub[i].subBase = base; });
-          rowY[r] = base + gap0 + LEVEL_STEP * (lv - 1) + drop + TAB_H;
+          shareLevel(g => g.level2, (g, v) => { g.level2 = v; }, sub);
+          if (sub.some(g => isWireless(g.l.kind))) lv = Math.max(1, ...sub.map(g => g.level2 + 1));
+          rowY[r] = base + gap0 + LEVEL_STEP * (lv - 1) + rowDrop(r) + TAB_H;
         }
         segs.forEach(g => { g.t[1] = g.side ? rowY[0] - TAB_H - 14 : rowY[g.row] - ((g.l.to.inTab && g.l.portKeys.length === 1) ? TAB_H : 0); });
         segsAll.push(...segs);
