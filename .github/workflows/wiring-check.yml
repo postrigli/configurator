@@ -1,0 +1,25 @@
+# Проверка ветки со схемой подключения. Сама на Pages ничего не публикует:
+# после её успешного завершения workflow «Deploy to GitHub Pages» в main
+# собирает эту ветку в подпапку /configurator/wiring/ (тестовый стенд).
+name: Wiring branch check
+
+on:
+  push:
+    branches: [claude/project-thread-e1fa5e]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
