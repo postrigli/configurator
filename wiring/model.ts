@@ -118,6 +118,13 @@ const node = (kind: NodeKind, title: string, extra: Partial<WNode> = {}): WNode 
 const dev = (productId: string, subtitle?: string, extra: Partial<WNode> = {}): WNode =>
   node('device', shortName(productId), { productId, subtitle, ...extra });
 
+type RelayLoad = { n: WNode; kind: LineKind; cable: string };
+
+const INTERMEDIATE_RELAY_ID = 'ec01061';
+
+const usesSeparateRelayChannel = (id: string) =>
+  id !== INTERMEDIATE_RELAY_ID && !neptunModels.some(model => model.id === id);
+
 const neptunModels = [
   { field: 'neptun12', id: 'ec01065', size: '1/2"' },
   { field: 'neptun34', id: 'ec01066', size: '3/4"' },
@@ -144,6 +151,22 @@ const neptunLoad = (state: AppState) => {
 
 const link = (parent: WNode, to: WNode, kind: LineKind, portName: string, portKeys: string[], tabs: string[], cable: string) => {
   parent.children.push({ to, kind, portName, portKeys, tabs, cable, label: cable ? `${portName} · ${cable}` : portName });
+};
+
+const assignIntermediateRelays = (
+  quantity: number,
+  loads: RelayLoad[],
+  miss: (productId: string, qty: number, reason: string) => void,
+) => {
+  const assigned = Math.min(quantity, loads.length);
+  for (const load of loads.slice(0, assigned)) {
+    const relay = dev(INTERMEDIATE_RELAY_ID, undefined, { kind: 'expander' });
+    link(relay, load.n, load.kind, 'Выход реле', ['OUT'], ['Вых.'], load.cable);
+    load.n = relay;
+  }
+  if (quantity > assigned) {
+    miss(INTERMEDIATE_RELAY_ID, quantity - assigned, 'нет свободной линии насоса или зоны отопления');
+  }
 };
 
 const buildStart = (state: AppState, items: CartItem[]): WiringModel => {
@@ -206,7 +229,7 @@ const buildStart = (state: AppState, items: CartItem[]): WiringModel => {
     else V40_RELAY_LETTERS.forEach((l, i) => baseRelays.push({ parent: u.root, portName: `Реле ${i + 1} (${l})`, key: `R${i + 1}`, tab: l }));
   });
 
-  const loads: { n: WNode; kind: LineKind; cable: string }[] = [];
+  const loads: RelayLoad[] = [];
   const pushLoad = (title: string, subtitle?: string, kind: LineKind = 'power230', cable = CABLE.power230, productId?: string) =>
     loads.push({ n: node('load', title, { subtitle, productId }), kind, cable });
   if (state.boilerPump) pushLoad('Насос бойлера ГВС');
@@ -214,9 +237,10 @@ const buildStart = (state: AppState, items: CartItem[]): WiringModel => {
   if (state.recirculationPump && !isStart) pushLoad('Насос рециркуляции');
   for (let i = 1; i <= (isStart ? 0 : state.zones); i++) pushLoad(`Зона ${i}`, qty('ec01099') ? 'сервоприводы ec01099' : 'сервоприводы коллектора', 'power230', CABLE.zone230);
   for (let i = 1; i <= (isStart ? 0 : Math.min(state.zonesWithTwoSources, state.zones)); i++) pushLoad(`Зона ${i}, 2-й контур`, 'тёплый пол / радиаторы', 'power230', CABLE.zone230);
+  assignIntermediateRelays(qty(INTERMEDIATE_RELAY_ID), loads, miss);
   const neptun = neptunLoad(state);
   if (neptun) loads.push(neptun);
-  manualByType('RELAY').filter(id => !neptunModels.some(model => model.id === id)).forEach(id => loads.push({ n: dev(id, 'добавлено вручную', { kind: 'load' }), kind: 'power230', cable: CABLE.power230 }));
+  manualByType('RELAY').filter(usesSeparateRelayChannel).forEach(id => loads.push({ n: dev(id, 'добавлено вручную', { kind: 'load' }), kind: 'power230', cable: CABLE.power230 }));
 
   // Котлы с сухим контактом: реле блоков по порядку (A–C первым).
   const freeBase = [...baseRelays];
@@ -561,9 +585,8 @@ const buildV40 = (state: AppState, items: CartItem[]): PlannedWiring => {
   });
 
   // ---------------------------------------------------------------- нагрузки 230 В
-  type Load = { n: WNode; kind: LineKind; cable: string };
-  const mk = (title: string, subtitle?: string, kind: LineKind = 'power230', cable = CABLE.power230): Load => ({ n: node('load', title, { subtitle }), kind, cable });
-  const loads = new Map<WNode, Load[]>(U.map(u => [u, []]));
+  const mk = (title: string, subtitle?: string, kind: LineKind = 'power230', cable = CABLE.power230): RelayLoad => ({ n: node('load', title, { subtitle }), kind, cable });
+  const loads = new Map<WNode, RelayLoad[]>(U.map(u => [u, []]));
   const C = UNIT_CIRCUITS;
   const used = new Map<WNode, number>(U.map(u => [u, 0]));
   const roomOf = (u: WNode) => C - used.get(u)!;
@@ -582,13 +605,14 @@ const buildV40 = (state: AppState, items: CartItem[]): PlannedWiring => {
     used.set(z, used.get(z)! + Math.max(pumpsUnit === z ? state.heatingPumps : 0, mixUnit === z ? state.mixingValves : 0));
   }
 
-  const boilerLoads: Load[] = [];
-  if (state.boilerPump) boilerLoads.push(mk('Насос бойлера ГВС'));
-  if (state.recirculationPump) boilerLoads.push(mk('Насос рециркуляции'));
+  const boilerPumps: RelayLoad[] = [];
+  if (state.boilerPump) boilerPumps.push(mk('Насос бойлера ГВС'));
+  if (state.recirculationPump) boilerPumps.push(mk('Насос рециркуляции'));
+  const boilerLoads = [...boilerPumps];
   const neptun = neptunLoad(state);
   if (neptun) boilerLoads.push(neptun);
-  manualByType('RELAY').filter(id => !neptunModels.some(model => model.id === id)).forEach(id => boilerLoads.push({ n: dev(id, 'добавлено вручную', { kind: 'load' }), kind: 'power230', cable: CABLE.power230 }));
-  const pumps: Load[] = [];
+  manualByType('RELAY').filter(usesSeparateRelayChannel).forEach(id => boilerLoads.push({ n: dev(id, 'добавлено вручную', { kind: 'load' }), kind: 'power230', cable: CABLE.power230 }));
+  const pumps: RelayLoad[] = [];
   for (let i = 1; i <= state.heatingPumps; i++) pumps.push(mk(`Насос отопления ${i}`));
   loads.get(pumpsUnit)!.push(...pumps);
   loads.get(U0)!.push(...boilerLoads);
@@ -597,14 +621,21 @@ const buildV40 = (state: AppState, items: CartItem[]): PlannedWiring => {
   // остаток зон переходит на блок 1 одной группой (сколько там поместится), лишнее — на последний блок зон.
   const zoneSub = 'тёплый пол / радиаторы';
   const z2 = Math.min(state.zonesWithTwoSources, state.zones);
-  const zoneGroups: Load[][] = [];
+  const zoneGroups: RelayLoad[][] = [];
   for (let i = 1; i <= state.zones; i++) {
     zoneGroups.push(i <= z2
       ? [mk(`Зона ${i}, 1-й контур`, zoneSub, 'power230', CABLE.zone230), mk(`Зона ${i}, 2-й контур`, zoneSub, 'power230', CABLE.zone230)]
       : [mk(`Зона ${i}`, zoneSub, 'power230', CABLE.zone230)]);
   }
-  const putZone = (u: WNode, g: Load[]) => { loads.get(u)!.push(...g); used.set(u, used.get(u)! + g.length); };
-  const restZones: Load[][] = [];
+  assignIntermediateRelays(qty(INTERMEDIATE_RELAY_ID), [
+    ...pumps,
+    ...boilerPumps,
+    ...zoneGroups.map(([first]) => first),
+    ...zoneGroups.flatMap(([, second]) => second ? [second] : []),
+  ], miss);
+
+  const putZone = (u: WNode, g: RelayLoad[]) => { loads.get(u)!.push(...g); used.set(u, used.get(u)! + g.length); };
+  const restZones: RelayLoad[][] = [];
   if (N === 1) zoneGroups.forEach(g => putZone(U0, g));
   else {
     let zi = 0;
@@ -627,7 +658,7 @@ const buildV40 = (state: AppState, items: CartItem[]): PlannedWiring => {
   const total025 = () => n025;
   U.forEach((u, ui) => {
     const base = V40_RELAY_LETTERS.map((l, i) => ({ parent: u, portName: `Реле ${i + 1} (${l})`, key: `R${i + 1}`, tab: l }));
-    const ls: Load[] = [];
+    const ls: RelayLoad[] = [];
     if (ui === 0) dryBoilers.forEach(bn => {
       const s = base.shift();
       if (s) link(s.parent, bn, 'boiler', s.portName, [s.key], [s.tab], CABLE.boilerRelay);
