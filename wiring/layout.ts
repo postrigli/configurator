@@ -310,11 +310,19 @@ export const layoutWiring = (model: WiringModel): LayoutResult => {
         const fg = segs.some(g => g.wStart) ? WAVE_FIRST_GAP : gap0;
         segs.forEach(g => { g.fg = fg; });
         proxG.forEach((p, i) => { segs[i].level = p.level; });
-        // беспроводные линии от одного приёмника — общая шина на одной полке
+        // Общая радиошина сохраняет самый нижний из уровней, рассчитанных для её ветвей.
+        // Подъём до верхнего уровня снова пересёк бы проводные полки, которые огибает дальняя ветвь.
         const shareLevel = (key: (g: Seg & { row: number }) => number, set: (g: Seg & { row: number }, v: number) => void, list: (Seg & { row: number })[]) => {
-          const m = new Map<string, number>();
-          list.forEach(g => { if (!isWireless(g.l.kind)) return; const k = `${g.s[0]}|${g.s[1]}`; m.set(k, Math.min(m.get(k) ?? 1e9, key(g))); });
-          list.forEach(g => { if (isWireless(g.l.kind)) set(g, m.get(`${g.s[0]}|${g.s[1]}`)!); });
+          const levels = new Map<string, number>();
+          const busKey = (g: Seg) => `${g.l.kind}|${g.s[0]}|${g.s[1]}`;
+          for (const g of list) {
+            if (!isWireless(g.l.kind)) continue;
+            const bus = busKey(g);
+            levels.set(bus, Math.max(levels.get(bus) ?? 0, key(g)));
+          }
+          for (const g of list) {
+            if (isWireless(g.l.kind)) set(g, levels.get(busKey(g))!);
+          }
         };
         shareLevel(g => g.level, (g, v) => { g.level = v; }, segs);
         if (segs.some(g => isWireless(g.l.kind))) lvG = Math.max(1, ...segs.map(g => g.level + 1));
